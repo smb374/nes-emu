@@ -46,7 +46,6 @@ pub struct CPU {
     pub sp: u8,
     pub status: CpuFlags,
     bus: Bus,
-    pub jmp: Option<u16>,
 }
 
 impl CPU {
@@ -59,7 +58,6 @@ impl CPU {
             sp: STACK_RESET,
             status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
             bus: Bus::new(rom),
-            jmp: None,
         }
     }
 
@@ -72,7 +70,6 @@ impl CPU {
             sp: STACK_RESET,
             status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
             bus,
-            jmp: None,
         }
     }
 
@@ -227,14 +224,10 @@ impl CPU {
                         self.reg_y = self.reg_y.wrapping_add(1);
                         self.update_nz(self.reg_y);
                     }
-                    JMP => {
-                        let addr = self.operand_addr(op.mode).unwrap();
-                        self.jmp = Some(addr);
-                    }
+                    JMP => self.pc = self.operand_addr(op.mode).unwrap(),
                     JSR => {
                         self.push_stack_u16(self.pc + 1);
-                        let addr = self.operand_addr(op.mode).unwrap();
-                        self.jmp = Some(addr);
+                        self.pc = self.operand_addr(op.mode).unwrap();
                     }
                     LDA => {
                         let addr = self.operand_addr(op.mode).unwrap();
@@ -322,9 +315,9 @@ impl CPU {
                         status &= !CpuFlags::BREAK;
                         status |= CpuFlags::BREAK2;
                         self.status = status;
-                        self.jmp = Some(self.pop_stack_u16());
+                        self.pc = self.pop_stack_u16();
                     }
-                    RTS => self.jmp = Some(self.pop_stack_u16() + 1),
+                    RTS => self.pc = self.pop_stack_u16() + 1,
                     SBC => {
                         // ADC with inverted operand
                         let addr = self.operand_addr(op.mode).unwrap();
@@ -595,9 +588,7 @@ impl CPU {
                 }
 
                 self.bus.tick(op.cycles);
-                if let Some(pc) = self.jmp.take() {
-                    self.pc = pc;
-                } else if pc_cache == self.pc {
+                if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
                 }
             } else {
@@ -648,9 +639,10 @@ impl CPU {
     fn branch_if(&mut self, condition: bool) {
         let offset = self.read_u8(self.pc) as i8 as i16;
         if condition {
-            self.jmp = Some(self.pc.wrapping_add(1).wrapping_add(offset as u16));
+            self.pc = self.pc.wrapping_add(1).wrapping_add(offset as u16);
+        } else {
+            self.pc += 1;
         }
-        self.pc += 1;
     }
 
     #[allow(dead_code)]
