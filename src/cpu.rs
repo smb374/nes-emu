@@ -26,7 +26,7 @@ bitflags! {
     // +--------- Negative
     #[repr(transparent)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct CpuStatus: u8 {
+    pub struct CpuFlags: u8 {
         const CARRY        = 0b00000001;
         const ZERO         = 0b00000010;
         const INTR_DISABLE = 0b00000100;
@@ -44,7 +44,7 @@ pub struct CPU {
     pub reg_x: u8,
     pub reg_y: u8,
     pub sp: u8,
-    pub status: CpuStatus,
+    pub status: CpuFlags,
     bus: Bus,
     pub jmp: Option<u16>,
 }
@@ -57,7 +57,7 @@ impl CPU {
             reg_x: 0,
             reg_y: 0,
             sp: STACK_RESET,
-            status: CpuStatus::BREAK2 | CpuStatus::INTR_DISABLE,
+            status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
             bus: Bus::new(rom),
             jmp: None,
         }
@@ -70,7 +70,7 @@ impl CPU {
             reg_x: 0,
             reg_y: 0,
             sp: STACK_RESET,
-            status: CpuStatus::BREAK2 | CpuStatus::INTR_DISABLE,
+            status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
             bus,
             jmp: None,
         }
@@ -81,7 +81,7 @@ impl CPU {
         self.reg_x = 0;
         self.reg_y = 0;
         self.sp = STACK_RESET;
-        self.status = CpuStatus::BREAK2 | CpuStatus::INTR_DISABLE;
+        self.status = CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE;
 
         self.pc = self.read_u16(0xFFFC);
     }
@@ -103,6 +103,9 @@ impl CPU {
         F: FnMut(&mut CPU),
     {
         loop {
+            if let Some(_nmi) = self.bus.poll_nmi_status() {
+                self.interrupt_nmi();
+            }
             cb(self);
             let opcode = self.read_u8(self.pc);
             self.pc += 1;
@@ -112,14 +115,14 @@ impl CPU {
                     ADC => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let val = self.read_u8(addr);
-                        let car = self.status.contains(CpuStatus::CARRY) as u16;
+                        let car = self.status.contains(CpuFlags::CARRY) as u16;
                         let sum = self.reg_a as u16 + val as u16 + car;
 
-                        self.status.set(CpuStatus::CARRY, sum > 0xFF);
+                        self.status.set(CpuFlags::CARRY, sum > 0xFF);
 
                         let result = (sum & 0xFF) as u8;
                         self.status.set(
-                            CpuStatus::OVERFLOW,
+                            CpuFlags::OVERFLOW,
                             ((self.reg_a ^ result) & (val ^ result) & 0x80) != 0,
                         );
 
@@ -133,66 +136,62 @@ impl CPU {
                     }
                     ASL => {
                         if op.mode == Some(ACC) {
-                            self.status.set(CpuStatus::CARRY, self.reg_a & 0x80 != 0);
+                            self.status.set(CpuFlags::CARRY, self.reg_a & 0x80 != 0);
                             self.reg_a <<= 1;
                             self.update_nz(self.reg_a);
                         } else {
                             let addr = self.operand_addr(op.mode).unwrap();
                             let mut val = self.read_u8(addr);
-                            self.status.set(CpuStatus::CARRY, val & 0x80 != 0);
+                            self.status.set(CpuFlags::CARRY, val & 0x80 != 0);
                             val <<= 1;
                             self.update_nz(val);
                             self.write_u8(addr, val);
                         }
                     }
-                    BCC => self.branch_if(!self.status.contains(CpuStatus::CARRY)),
-                    BCS => self.branch_if(self.status.contains(CpuStatus::CARRY)),
-                    BEQ => self.branch_if(self.status.contains(CpuStatus::ZERO)),
+                    BCC => self.branch_if(!self.status.contains(CpuFlags::CARRY)),
+                    BCS => self.branch_if(self.status.contains(CpuFlags::CARRY)),
+                    BEQ => self.branch_if(self.status.contains(CpuFlags::ZERO)),
                     BIT => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let val = self.read_u8(addr);
                         let res = self.reg_a & val;
-                        self.status.set(CpuStatus::ZERO, res == 0);
-                        self.status.set(CpuStatus::OVERFLOW, val & 0x40 != 0);
-                        self.status.set(CpuStatus::NEGATIVE, val & 0x80 != 0);
+                        self.status.set(CpuFlags::ZERO, res == 0);
+                        self.status.set(CpuFlags::OVERFLOW, val & 0x40 != 0);
+                        self.status.set(CpuFlags::NEGATIVE, val & 0x80 != 0);
                     }
-                    BMI => self.branch_if(self.status.contains(CpuStatus::NEGATIVE)),
-                    BNE => self.branch_if(!self.status.contains(CpuStatus::ZERO)),
-                    BPL => self.branch_if(!self.status.contains(CpuStatus::NEGATIVE)),
+                    BMI => self.branch_if(self.status.contains(CpuFlags::NEGATIVE)),
+                    BNE => self.branch_if(!self.status.contains(CpuFlags::ZERO)),
+                    BPL => self.branch_if(!self.status.contains(CpuFlags::NEGATIVE)),
                     BRK => {
-                        let npc = (self.pc + 1).to_le_bytes();
-                        self.push_stack(npc[1]);
-                        self.push_stack(npc[0]);
-                        self.push_stack(
-                            (self.status | CpuStatus::BREAK | CpuStatus::BREAK2).bits(),
-                        );
-                        self.status.insert(CpuStatus::INTR_DISABLE);
+                        self.push_stack_u16(self.pc + 1);
+                        self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
+                        self.status.insert(CpuFlags::INTR_DISABLE);
                         self.pc += 1;
                         // self.jmp = Some(self.read_u16(0xFFFE));
                         break;
                     }
-                    BVC => self.branch_if(!self.status.contains(CpuStatus::OVERFLOW)),
-                    BVS => self.branch_if(self.status.contains(CpuStatus::OVERFLOW)),
-                    CLC => self.status &= !CpuStatus::CARRY,
-                    CLD => self.status &= !CpuStatus::DECIMAL,
-                    CLI => self.status &= !CpuStatus::INTR_DISABLE,
-                    CLV => self.status &= !CpuStatus::OVERFLOW,
+                    BVC => self.branch_if(!self.status.contains(CpuFlags::OVERFLOW)),
+                    BVS => self.branch_if(self.status.contains(CpuFlags::OVERFLOW)),
+                    CLC => self.status &= !CpuFlags::CARRY,
+                    CLD => self.status &= !CpuFlags::DECIMAL,
+                    CLI => self.status &= !CpuFlags::INTR_DISABLE,
+                    CLV => self.status &= !CpuFlags::OVERFLOW,
                     CMP => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let (res, car) = self.reg_a.overflowing_sub(self.read_u8(addr));
-                        self.status.set(CpuStatus::CARRY, !car);
+                        self.status.set(CpuFlags::CARRY, !car);
                         self.update_nz(res);
                     }
                     CPX => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let (res, car) = self.reg_x.overflowing_sub(self.read_u8(addr));
-                        self.status.set(CpuStatus::CARRY, !car);
+                        self.status.set(CpuFlags::CARRY, !car);
                         self.update_nz(res);
                     }
                     CPY => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let (res, car) = self.reg_y.overflowing_sub(self.read_u8(addr));
-                        self.status.set(CpuStatus::CARRY, !car);
+                        self.status.set(CpuFlags::CARRY, !car);
                         self.update_nz(res);
                     }
                     DEC => {
@@ -233,9 +232,7 @@ impl CPU {
                         self.jmp = Some(addr);
                     }
                     JSR => {
-                        let npc = (self.pc + 1).to_le_bytes();
-                        self.push_stack(npc[1]);
-                        self.push_stack(npc[0]);
+                        self.push_stack_u16(self.pc + 1);
                         let addr = self.operand_addr(op.mode).unwrap();
                         self.jmp = Some(addr);
                     }
@@ -256,13 +253,13 @@ impl CPU {
                     }
                     LSR => {
                         if op.mode == Some(ACC) {
-                            self.status.set(CpuStatus::CARRY, self.reg_a & 0x01 != 0);
+                            self.status.set(CpuFlags::CARRY, self.reg_a & 0x01 != 0);
                             self.reg_a >>= 1;
                             self.update_nz(self.reg_a);
                         } else {
                             let addr = self.operand_addr(op.mode).unwrap();
                             let mut val = self.read_u8(addr);
-                            self.status.set(CpuStatus::CARRY, val & 0x01 != 0);
+                            self.status.set(CpuFlags::CARRY, val & 0x01 != 0);
                             val >>= 1;
                             self.update_nz(val);
                             self.write_u8(addr, val);
@@ -276,83 +273,79 @@ impl CPU {
                     }
                     PHA => self.push_stack(self.reg_a),
                     PHP => {
-                        self.push_stack((self.status | CpuStatus::BREAK | CpuStatus::BREAK2).bits())
+                        self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits())
                     }
                     PLA => {
                         self.reg_a = self.pop_stack();
                         self.update_nz(self.reg_a);
                     }
                     PLP => {
-                        let mut status = CpuStatus::from_bits_retain(self.pop_stack());
-                        status &= !CpuStatus::BREAK;
-                        status |= CpuStatus::BREAK2;
+                        let mut status = CpuFlags::from_bits_retain(self.pop_stack());
+                        status &= !CpuFlags::BREAK;
+                        status |= CpuFlags::BREAK2;
                         self.status = status;
                     }
                     ROL => {
-                        let ocar = self.status.contains(CpuStatus::CARRY);
+                        let ocar = self.status.contains(CpuFlags::CARRY);
                         if op.mode == Some(ACC) {
                             let (res, car) = utils::rol(self.reg_a, ocar);
-                            self.status.set(CpuStatus::CARRY, car);
+                            self.status.set(CpuFlags::CARRY, car);
                             self.reg_a = res;
                             self.update_nz(self.reg_a);
                         } else {
                             let addr = self.operand_addr(op.mode).unwrap();
                             let val = self.read_u8(addr);
                             let (res, car) = utils::rol(val, ocar);
-                            self.status.set(CpuStatus::CARRY, car);
+                            self.status.set(CpuFlags::CARRY, car);
                             self.update_nz(res);
                             self.write_u8(addr, res);
                         }
                     }
                     ROR => {
-                        let ocar = self.status.contains(CpuStatus::CARRY);
+                        let ocar = self.status.contains(CpuFlags::CARRY);
                         if op.mode == Some(ACC) {
                             let (res, car) = utils::ror(self.reg_a, ocar);
-                            self.status.set(CpuStatus::CARRY, car);
+                            self.status.set(CpuFlags::CARRY, car);
                             self.reg_a = res;
                             self.update_nz(self.reg_a);
                         } else {
                             let addr = self.operand_addr(op.mode).unwrap();
                             let val = self.read_u8(addr);
                             let (res, car) = utils::ror(val, ocar);
-                            self.status.set(CpuStatus::CARRY, car);
+                            self.status.set(CpuFlags::CARRY, car);
                             self.update_nz(res);
                             self.write_u8(addr, res);
                         }
                     }
                     RTI => {
-                        let mut status = CpuStatus::from_bits_retain(self.pop_stack());
-                        status &= !CpuStatus::BREAK;
-                        status |= CpuStatus::BREAK2;
+                        let mut status = CpuFlags::from_bits_retain(self.pop_stack());
+                        status &= !CpuFlags::BREAK;
+                        status |= CpuFlags::BREAK2;
                         self.status = status;
-                        let npc = [self.pop_stack(), self.pop_stack()];
-                        self.jmp = Some(u16::from_le_bytes(npc));
+                        self.jmp = Some(self.pop_stack_u16());
                     }
-                    RTS => {
-                        let npc = [self.pop_stack(), self.pop_stack()];
-                        self.jmp = Some(u16::from_le_bytes(npc) + 1);
-                    }
+                    RTS => self.jmp = Some(self.pop_stack_u16() + 1),
                     SBC => {
                         // ADC with inverted operand
                         let addr = self.operand_addr(op.mode).unwrap();
                         let val = self.read_u8(addr);
-                        let car = self.status.contains(CpuStatus::CARRY) as u16;
+                        let car = self.status.contains(CpuFlags::CARRY) as u16;
                         let sum = self.reg_a as u16 + (val ^ 0xFF) as u16 + car;
 
-                        self.status.set(CpuStatus::CARRY, sum > 0xFF);
+                        self.status.set(CpuFlags::CARRY, sum > 0xFF);
 
                         let res = (sum & 0xFF) as u8;
                         self.status.set(
-                            CpuStatus::OVERFLOW,
+                            CpuFlags::OVERFLOW,
                             ((self.reg_a ^ res) & (self.reg_a ^ val) & 0x80) != 0,
                         );
 
                         self.reg_a = res;
                         self.update_nz(self.reg_a);
                     }
-                    SEC => self.status |= CpuStatus::CARRY,
-                    SED => self.status |= CpuStatus::DECIMAL,
-                    SEI => self.status |= CpuStatus::INTR_DISABLE,
+                    SEC => self.status |= CpuFlags::CARRY,
+                    SED => self.status |= CpuFlags::DECIMAL,
+                    SEI => self.status |= CpuFlags::INTR_DISABLE,
                     STA => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         self.write_u8(addr, self.reg_a);
@@ -392,7 +385,7 @@ impl CPU {
                         self.reg_a &= self.read_u8(addr);
                         self.update_nz(self.reg_a);
                         self.status
-                            .set(CpuStatus::CARRY, self.status.contains(CpuStatus::NEGATIVE));
+                            .set(CpuFlags::CARRY, self.status.contains(CpuFlags::NEGATIVE));
                     }
                     AAX => {
                         let addr = self.operand_addr(op.mode).unwrap();
@@ -403,24 +396,24 @@ impl CPU {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let val = self.read_u8(addr);
                         let (res, _) =
-                            utils::ror(self.reg_a & val, self.status.contains(CpuStatus::CARRY));
+                            utils::ror(self.reg_a & val, self.status.contains(CpuFlags::CARRY));
                         self.reg_a = res;
                         self.update_nz(self.reg_a);
                         let chk = (res & 0b0110_0000) >> 5;
                         match chk {
                             0b11 => {
-                                self.status |= CpuStatus::CARRY;
-                                self.status &= !CpuStatus::OVERFLOW;
+                                self.status |= CpuFlags::CARRY;
+                                self.status &= !CpuFlags::OVERFLOW;
                             }
                             0b00 => {
-                                self.status &= !(CpuStatus::CARRY | CpuStatus::OVERFLOW);
+                                self.status &= !(CpuFlags::CARRY | CpuFlags::OVERFLOW);
                             }
                             0b01 => {
-                                self.status |= CpuStatus::OVERFLOW;
-                                self.status &= !CpuStatus::CARRY;
+                                self.status |= CpuFlags::OVERFLOW;
+                                self.status &= !CpuFlags::CARRY;
                             }
                             0b10 => {
-                                self.status |= CpuStatus::CARRY | CpuStatus::OVERFLOW;
+                                self.status |= CpuFlags::CARRY | CpuFlags::OVERFLOW;
                             }
                             _ => unreachable!(),
                         }
@@ -430,7 +423,7 @@ impl CPU {
                         let val = self.reg_a & self.read_u8(addr);
                         self.reg_a = val >> 1;
                         self.update_nz(self.reg_a);
-                        self.status.set(CpuStatus::CARRY, val & 1 != 0);
+                        self.status.set(CpuFlags::CARRY, val & 1 != 0);
                     }
                     ATX => {
                         let addr = self.operand_addr(op.mode).unwrap();
@@ -448,7 +441,7 @@ impl CPU {
                         let val = self.read_u8(addr);
                         self.reg_x &= self.reg_a;
                         let sum = self.reg_x as u16 + (val ^ 0xFF) as u16 + 1;
-                        self.status.set(CpuStatus::CARRY, sum > 0xFF);
+                        self.status.set(CpuFlags::CARRY, sum > 0xFF);
                         self.reg_x = (sum & 0xFF) as u8;
                         self.update_nz(self.reg_x);
                     }
@@ -457,7 +450,7 @@ impl CPU {
                         let res = self.read_u8(addr).wrapping_sub(1);
                         self.write_u8(addr, res);
                         let (res, car) = self.reg_a.overflowing_sub(res);
-                        self.status.set(CpuStatus::CARRY, !car);
+                        self.status.set(CpuFlags::CARRY, !car);
                         self.update_nz(res);
                     }
                     DOP => {}
@@ -465,14 +458,14 @@ impl CPU {
                         let addr = self.operand_addr(op.mode).unwrap();
                         let val = self.read_u8(addr).wrapping_add(1);
                         self.write_u8(addr, val);
-                        let car = self.status.contains(CpuStatus::CARRY) as u16;
+                        let car = self.status.contains(CpuFlags::CARRY) as u16;
                         let sum = self.reg_a as u16 + (val ^ 0xFF) as u16 + car;
 
-                        self.status.set(CpuStatus::CARRY, sum > 0xFF);
+                        self.status.set(CpuFlags::CARRY, sum > 0xFF);
 
                         let res = (sum & 0xFF) as u8;
                         self.status.set(
-                            CpuStatus::OVERFLOW,
+                            CpuFlags::OVERFLOW,
                             ((self.reg_a ^ res) & (self.reg_a ^ val) & 0x80) != 0,
                         );
 
@@ -502,9 +495,9 @@ impl CPU {
                         let addr = self.operand_addr(op.mode).unwrap();
                         {
                             let val = self.read_u8(addr);
-                            let ocar = self.status.contains(CpuStatus::CARRY);
+                            let ocar = self.status.contains(CpuFlags::CARRY);
                             let (res, car) = utils::rol(val, ocar);
-                            self.status.set(CpuStatus::CARRY, car);
+                            self.status.set(CpuFlags::CARRY, car);
                             self.update_nz(res);
                             self.write_u8(addr, res);
                         }
@@ -516,23 +509,23 @@ impl CPU {
                     RRA => {
                         let addr = self.operand_addr(op.mode).unwrap();
                         {
-                            let ocar = self.status.contains(CpuStatus::CARRY);
+                            let ocar = self.status.contains(CpuFlags::CARRY);
                             let val = self.read_u8(addr);
                             let (res, car) = utils::ror(val, ocar);
-                            self.status.set(CpuStatus::CARRY, car);
+                            self.status.set(CpuFlags::CARRY, car);
                             self.update_nz(res);
                             self.write_u8(addr, res);
                         }
                         {
                             let val = self.read_u8(addr);
-                            let car = self.status.contains(CpuStatus::CARRY) as u16;
+                            let car = self.status.contains(CpuFlags::CARRY) as u16;
                             let sum = self.reg_a as u16 + val as u16 + car;
 
-                            self.status.set(CpuStatus::CARRY, sum > 0xFF);
+                            self.status.set(CpuFlags::CARRY, sum > 0xFF);
 
                             let result = (sum & 0xFF) as u8;
                             self.status.set(
-                                CpuStatus::OVERFLOW,
+                                CpuFlags::OVERFLOW,
                                 ((self.reg_a ^ result) & (val ^ result) & 0x80) != 0,
                             );
 
@@ -544,7 +537,7 @@ impl CPU {
                         let addr = self.operand_addr(op.mode).unwrap();
                         {
                             let mut val = self.read_u8(addr);
-                            self.status.set(CpuStatus::CARRY, val & 0x80 != 0);
+                            self.status.set(CpuFlags::CARRY, val & 0x80 != 0);
                             val <<= 1;
                             self.update_nz(val);
                             self.write_u8(addr, val);
@@ -558,7 +551,7 @@ impl CPU {
                         let addr = self.operand_addr(op.mode).unwrap();
                         {
                             let mut val = self.read_u8(addr);
-                            self.status.set(CpuStatus::CARRY, val & 0x01 != 0);
+                            self.status.set(CpuFlags::CARRY, val & 0x01 != 0);
                             val >>= 1;
                             self.update_nz(val);
                             self.write_u8(addr, val);
@@ -600,6 +593,8 @@ impl CPU {
                         self.write_u8(addr, res);
                     }
                 }
+
+                self.bus.tick(op.cycles);
                 if let Some(pc) = self.jmp.take() {
                     self.pc = pc;
                 } else if pc_cache == self.pc {
@@ -609,6 +604,30 @@ impl CPU {
                 panic!("Unknown op: {}", opcode);
             }
         }
+    }
+
+    fn interrupt_nmi(&mut self) {
+        self.push_stack_u16(self.pc);
+        let mut flag = self.status.clone();
+        flag.set(CpuFlags::BREAK, false);
+        flag.set(CpuFlags::BREAK2, true);
+
+        self.push_stack(flag.bits());
+        self.status.insert(CpuFlags::INTR_DISABLE);
+
+        self.bus.tick(2);
+        self.pc = self.read_u16(0xFFFA);
+    }
+
+    fn push_stack_u16(&mut self, val: u16) {
+        let vbuf = val.to_le_bytes();
+        self.push_stack(vbuf[1]);
+        self.push_stack(vbuf[0]);
+    }
+
+    fn pop_stack_u16(&mut self) -> u16 {
+        let vbuf = [self.pop_stack(), self.pop_stack()];
+        u16::from_le_bytes(vbuf)
     }
 
     fn push_stack(&mut self, val: u8) {
@@ -622,8 +641,8 @@ impl CPU {
     }
 
     fn update_nz(&mut self, val: u8) {
-        self.status.set(CpuStatus::ZERO, val == 0);
-        self.status.set(CpuStatus::NEGATIVE, val & 0x80 != 0);
+        self.status.set(CpuFlags::ZERO, val == 0);
+        self.status.set(CpuFlags::NEGATIVE, val & 0x80 != 0);
     }
 
     fn branch_if(&mut self, condition: bool) {

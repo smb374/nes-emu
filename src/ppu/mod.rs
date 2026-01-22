@@ -21,6 +21,10 @@ pub struct PPU {
     pub oam_data: [u8; 0x100],
     pub palette_table: [u8; 0x20],
     internal_data_buf: u8,
+
+    pub nmi_interrupt: Option<u8>,
+    scanline: u16,
+    cycles: usize,
 }
 
 impl Default for PPU {
@@ -44,6 +48,9 @@ impl PPU {
             oam_data: [0; 0x100],
             palette_table: [0; 0x20],
             internal_data_buf: 0,
+            nmi_interrupt: None,
+            scanline: 0,
+            cycles: 0,
         }
     }
 
@@ -71,9 +78,37 @@ impl PPU {
         self.addr.increment(self.ctrl.vram_addr_increment());
     }
 
+    pub fn tick(&mut self, cycles: u8) -> bool {
+        self.cycles += cycles as usize;
+        if self.cycles >= 341 {
+            self.cycles = self.cycles - 341;
+            self.scanline += 1;
+
+            if self.scanline == 241 {
+                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
+                    self.status.insert(StatusRegister::VBLANK);
+                    todo!("Should trigger NMI interrupt")
+                }
+            }
+
+            if self.scanline >= 262 {
+                self.scanline = 0;
+                self.status.remove(StatusRegister::VBLANK);
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn write_to_ctrl(&mut self, value: u8) {
-        // let before_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
+        let before_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
         self.ctrl.update(value);
+        if !before_nmi_status
+            && self.ctrl.contains(ControlRegister::GENERATE_NMI)
+            && self.status.contains(StatusRegister::VBLANK)
+        {
+            self.nmi_interrupt = Some(1);
+        }
     }
 
     pub fn write_to_mask(&mut self, value: u8) {

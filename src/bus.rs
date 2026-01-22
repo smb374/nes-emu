@@ -43,6 +43,8 @@ pub struct Bus {
     vram: [u8; 0x800],
     rom: Rom,
     ppu: PPU,
+
+    cycles: usize,
 }
 
 impl Bus {
@@ -52,6 +54,8 @@ impl Bus {
             vram: [0u8; 0x800],
             rom,
             ppu,
+
+            cycles: 0,
         }
     }
 
@@ -62,6 +66,15 @@ impl Bus {
             addr = addr % 0x4000;
         }
         self.rom.prg_rom[addr as usize]
+    }
+
+    pub fn tick(&mut self, cycles: u8) {
+        self.cycles += cycles as usize;
+        self.ppu.tick(cycles * 3);
+    }
+
+    pub fn poll_nmi_status(&mut self) -> Option<u8> {
+        self.ppu.nmi_interrupt.take()
     }
 }
 
