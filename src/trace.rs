@@ -1,6 +1,7 @@
 use crate::{
     Mem,
-    cpu::{AddressMode, CPU, OPS, OpFamily},
+    cpu::CPU,
+    opcodes::{AddressMode, OPS, OpFamily},
 };
 
 pub fn trace(cpu: &mut CPU) -> String {
