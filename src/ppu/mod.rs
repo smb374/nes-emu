@@ -45,7 +45,7 @@ impl PPU {
             addr: AddrRegister::new(),
             vram: [0; 0x800],
             oam_addr: 0,
-            oam_data: [0; 0x100],
+            oam_data: [0xFF; 0x100],
             palette_table: [0; 0x20],
             internal_data_buf: 0,
             nmi_interrupt: None,
@@ -78,16 +78,16 @@ impl PPU {
         self.addr.increment(self.ctrl.vram_addr_increment());
     }
 
-    pub fn tick(&mut self, cycles: u8) -> bool {
+    pub fn tick(&mut self, cycles: u16) -> bool {
         self.cycles += cycles as usize;
         if self.cycles >= 341 {
             self.cycles = self.cycles - 341;
             self.scanline += 1;
 
             if self.scanline == 241 {
-                self.status.set_vblank_status(true);
-                self.status.set_sprite_zero_hit(false);
-                if self.ctrl.generate_vblank_nmi() {
+                self.status.set(StatusRegister::VBLANK_STARTED, true);
+                self.status.set(StatusRegister::SPRITE_ZERO_HIT, false);
+                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
                     self.nmi_interrupt = Some(1);
                 }
             }
@@ -95,8 +95,8 @@ impl PPU {
             if self.scanline >= 262 {
                 self.scanline = 0;
                 self.nmi_interrupt = None;
-                self.status.set_sprite_zero_hit(false);
-                self.status.reset_vblank_status();
+                self.status.set(StatusRegister::SPRITE_ZERO_HIT, false);
+                self.status.remove(StatusRegister::VBLANK_STARTED);
                 return true;
             }
         }
@@ -108,9 +108,12 @@ impl PPU {
     }
 
     pub fn write_to_ctrl(&mut self, value: u8) {
-        let before_nmi_status = self.ctrl.generate_vblank_nmi();
+        let before_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
         self.ctrl.update(value);
-        if !before_nmi_status && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
+        if !before_nmi_status
+            && self.ctrl.contains(ControlRegister::GENERATE_NMI)
+            && self.status.contains(StatusRegister::VBLANK_STARTED)
+        {
             self.nmi_interrupt = Some(1);
         }
     }
@@ -120,8 +123,8 @@ impl PPU {
     }
 
     pub fn read_status(&mut self) -> u8 {
-        let data = self.status.snapshot();
-        self.status.reset_vblank_status();
+        let data = self.status.bits();
+        self.status.remove(StatusRegister::VBLANK_STARTED);
         self.addr.reset_latch();
         self.scroll.reset_latch();
         data
@@ -364,12 +367,12 @@ pub mod test {
     #[test]
     fn test_read_status_resets_vblank() {
         let mut ppu = PPU::default();
-        ppu.status.set_vblank_status(true);
+        ppu.status.set(StatusRegister::VBLANK_STARTED, true);
 
         let status = ppu.read_status();
 
         assert_eq!(status >> 7, 1);
-        assert_eq!(ppu.status.snapshot() >> 7, 0);
+        assert_eq!(ppu.status.bits() >> 7, 0);
     }
 
     #[test]

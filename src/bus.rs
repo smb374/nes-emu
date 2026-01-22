@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{
     Mem,
     cartridge::{Mirroring, Rom},
+    joypad::Joypad,
     ppu::PPU,
 };
 
@@ -38,19 +39,22 @@ const RAM_BASE: u16 = 0x0000;
 const RAM_MIRRORS_END: u16 = 0x1FFF;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 
+#[allow(unused)]
 pub struct Bus<'call> {
     vram: [u8; 0x800],
     rom: Rom,
     ppu: PPU,
 
     cycles: usize,
-    cb: Box<dyn FnMut(&PPU) + 'call>,
+    joypad1: Joypad,
+    joypad2: Joypad,
+    cb: Box<dyn FnMut(&PPU, &mut Joypad) + 'call>,
 }
 
 impl<'call> Bus<'call> {
     pub fn new<F>(rom: Rom, f: F) -> Self
     where
-        F: FnMut(&PPU) + 'call,
+        F: FnMut(&PPU, &mut Joypad) + 'call,
     {
         let ppu = PPU::new(Arc::clone(&rom.chr_rom), Mirroring::Horizontal);
         Self {
@@ -58,6 +62,8 @@ impl<'call> Bus<'call> {
             rom,
             ppu,
 
+            joypad1: Joypad::new(),
+            joypad2: Joypad::new(),
             cycles: 0,
             cb: Box::new(f),
         }
@@ -66,13 +72,13 @@ impl<'call> Bus<'call> {
     fn read_prg_rom(&self, mut addr: u16) -> u8 {
         addr -= 0x8000;
         if self.rom.prg_rom.len() == 0x4000 && addr >= 0x4000 {
-            //mirror if needed
+            // mirror if needed
             addr = addr % 0x4000;
         }
         self.rom.prg_rom[addr as usize]
     }
 
-    pub fn tick(&mut self, cycles: u8) {
+    pub fn tick(&mut self, cycles: u16) {
         self.cycles += cycles as usize;
 
         let nmi_before = self.ppu.nmi_interrupt.is_some();
@@ -80,7 +86,7 @@ impl<'call> Bus<'call> {
         let nmi_after = self.ppu.nmi_interrupt.is_some();
 
         if !nmi_before && nmi_after {
-            (self.cb)(&self.ppu);
+            (self.cb)(&self.ppu, &mut self.joypad1);
         }
     }
 
@@ -103,6 +109,14 @@ impl<'call> Mem for Bus<'call> {
             0x2002 => self.ppu.read_status(),
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(),
+
+            0x4000..=0x4015 => {
+                // ignore APU
+                0
+            }
+
+            0x4016 => self.joypad1.read(),
+            0x4017 => self.joypad2.read(),
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x2007;
@@ -147,6 +161,29 @@ impl<'call> Mem for Bus<'call> {
             }
             0x2007 => {
                 self.ppu.write_to_data(data);
+            }
+
+            0x4000..=0x4013 | 0x4015 => {
+                //ignore APU
+            }
+
+            0x4016 => self.joypad1.write(data),
+
+            0x4017 => self.joypad2.write(data),
+
+            // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
+            0x4014 => {
+                let mut buffer: [u8; 256] = [0; 256];
+                let hi: u16 = (data as u16) << 8;
+                for i in 0..256u16 {
+                    buffer[i as usize] = self.read_u8(hi + i);
+                }
+
+                self.ppu.write_oam_dma(&buffer);
+
+                // todo: handle this eventually
+                let add_cycles: u16 = if self.cycles % 2 == 1 { 514 } else { 513 };
+                self.tick(add_cycles); //todo this will cause weird effects as PPU will have 513/514 * 3 ticks
             }
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {

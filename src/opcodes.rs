@@ -7,7 +7,7 @@ pub struct Op {
     pub family: OpFamily,
     pub mode: Option<AddressMode>,
     pub len: u8,
-    pub cycles: u8,
+    pub cycles: u16,
     pub mnemonic: &'static str,
 }
 

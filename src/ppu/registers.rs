@@ -10,14 +10,14 @@ use bitflags::bitflags;
 //   ++-++++--++++-++++- VRAM address
 pub struct AddrRegister {
     value: (u8, u8),
-    hi_ptr: bool,
+    latch: bool,
 }
 
 impl AddrRegister {
     pub fn new() -> Self {
         AddrRegister {
             value: (0, 0), // high byte first, lo byte second
-            hi_ptr: true,
+            latch: true,
         }
     }
 
@@ -27,7 +27,7 @@ impl AddrRegister {
     }
 
     pub fn update(&mut self, data: u8) {
-        if self.hi_ptr {
+        if self.latch {
             self.value.0 = data;
         } else {
             self.value.1 = data;
@@ -38,7 +38,7 @@ impl AddrRegister {
             self.set(self.get() & 0b11111111111111);
         }
 
-        self.hi_ptr = !self.hi_ptr;
+        self.latch = !self.latch;
     }
 
     pub fn increment(&mut self, inc: u8) {
@@ -53,7 +53,7 @@ impl AddrRegister {
     }
 
     pub fn reset_latch(&mut self) {
-        self.hi_ptr = true;
+        self.latch = true;
     }
 
     pub fn get(&self) -> u16 {
@@ -147,10 +147,6 @@ impl ControlRegister {
         }
     }
 
-    pub fn generate_vblank_nmi(&self) -> bool {
-        return self.contains(Self::GENERATE_NMI);
-    }
-
     pub fn update(&mut self, data: u8) {
         *self = Self::from_bits_retain(data);
     }
@@ -183,27 +179,9 @@ bitflags! {
     }
 }
 
-pub enum Color {
-    Red,
-    Green,
-    Blue,
-}
-
 impl MaskRegister {
     pub fn new() -> Self {
         Self::from_bits_truncate(0b00000000)
-    }
-
-    pub fn is_grayscale(&self) -> bool {
-        self.contains(Self::GREYSCALE)
-    }
-
-    pub fn leftmost_8pxl_background(&self) -> bool {
-        self.contains(Self::LEFTMOST_8PXL_BG)
-    }
-
-    pub fn leftmost_8pxl_sprite(&self) -> bool {
-        self.contains(Self::LEFTMOST_8PXL_SP)
     }
 
     pub fn show_background(&self) -> bool {
@@ -214,19 +192,12 @@ impl MaskRegister {
         self.contains(Self::SHOW_SPRITE)
     }
 
-    pub fn emphasise(&self) -> Vec<Color> {
-        let mut result = Vec::<Color>::new();
-        if self.contains(Self::EMPHASISE_RED) {
-            result.push(Color::Red);
-        }
-        if self.contains(Self::EMPHASISE_BLUE) {
-            result.push(Color::Blue);
-        }
-        if self.contains(Self::EMPHASISE_GREEN) {
-            result.push(Color::Green);
-        }
-
-        result
+    pub fn emphasise(&self) -> (bool, bool, bool) {
+        (
+            self.contains(Self::EMPHASISE_RED),
+            self.contains(Self::EMPHASISE_GREEN),
+            self.contains(Self::EMPHASISE_BLUE),
+        )
     }
 
     pub fn update(&mut self, data: u8) {
@@ -246,7 +217,7 @@ bitflags! {
     pub struct StatusRegister: u8 {
         const SPRITE_OVERFLOW = 0b00100000;
         const SPRITE_ZERO_HIT = 0b01000000;
-        const VBLANK          = 0b10000000;
+        const VBLANK_STARTED  = 0b10000000;
 
         const _ = !0;
     }
@@ -255,30 +226,6 @@ bitflags! {
 impl StatusRegister {
     pub fn new() -> Self {
         Self::from_bits_truncate(0b00000000)
-    }
-
-    pub fn set_vblank_status(&mut self, status: bool) {
-        self.set(Self::VBLANK, status);
-    }
-
-    pub fn set_sprite_zero_hit(&mut self, status: bool) {
-        self.set(Self::SPRITE_ZERO_HIT, status);
-    }
-
-    pub fn set_sprite_overflow(&mut self, status: bool) {
-        self.set(Self::SPRITE_OVERFLOW, status);
-    }
-
-    pub fn reset_vblank_status(&mut self) {
-        self.remove(Self::VBLANK);
-    }
-
-    pub fn is_in_vblank(&self) -> bool {
-        self.contains(Self::VBLANK)
-    }
-
-    pub fn snapshot(&self) -> u8 {
-        self.bits()
     }
 }
 
