@@ -26,7 +26,7 @@ pub fn trace(cpu: &mut CPU) -> String {
     // Restore PC
     cpu.pc = saved_pc;
 
-    let tmp = match op.size {
+    let tmp = match op.len {
         1 => match op.code {
             0x0a | 0x4a | 0x2a | 0x6a => format!("A "),
             _ => String::from(""),
@@ -142,8 +142,7 @@ mod test {
 
     #[test]
     fn test_format_trace() {
-        let mut bus = Bus::default();
-        bus.insert(test_rom(vec![]));
+        let mut bus = Bus::new(test_rom(vec![]));
         bus.write_u8(100, 0xa2);
         bus.write_u8(101, 0x01);
         bus.write_u8(102, 0xca);
@@ -175,8 +174,7 @@ mod test {
 
     #[test]
     fn test_format_mem_access() {
-        let mut bus = Bus::default();
-        bus.insert(test_rom(vec![]));
+        let mut bus = Bus::new(test_rom(vec![]));
         // ORA ($33), Y
         bus.write_u8(100, 0x11);
         bus.write_u8(101, 0x33);

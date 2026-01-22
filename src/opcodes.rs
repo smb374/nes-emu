@@ -6,7 +6,7 @@ pub struct Op {
     pub code: u8,
     pub family: OpFamily,
     pub mode: Option<AddressMode>,
-    pub size: u8,
+    pub len: u8,
     pub cycles: u8,
     pub mnemonic: &'static str,
 }
@@ -112,22 +112,22 @@ pub enum AddressMode {
 }
 
 macro_rules! op {
-    ($code:expr, $family:ident, $mode:ident, $size:expr, $cycles:expr, $mnemonic:expr) => {
+    ($code:expr, $family:ident, $mode:ident, $len:expr, $cycles:expr, $mnemonic:expr) => {
         Some(Op {
             code: $code,
             family: $family,
             mode: Some($mode),
-            size: $size,
+            len: $len,
             cycles: $cycles,
             mnemonic: $mnemonic,
         })
     };
-    ($code:expr, $family:ident, $size:expr, $cycles:expr, $mnemonic:expr) => {
+    ($code:expr, $family:ident, $len:expr, $cycles:expr, $mnemonic:expr) => {
         Some(Op {
             code: $code,
             family: $family,
             mode: None,
-            size: $size,
+            len: $len,
             cycles: $cycles,
             mnemonic: $mnemonic,
         })
