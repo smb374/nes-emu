@@ -1,4 +1,8 @@
+pub mod bus;
+pub mod cartridge;
 pub mod cpu;
+pub mod trace;
+pub mod utils;
 
 pub trait Mem {
     fn read_u8(&self, addr: u16) -> u8;
