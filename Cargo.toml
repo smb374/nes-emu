@@ -1,0 +1,13 @@
+[package]
+name = "nes-emu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "^2"
+sdl2 = {version = "^0.38", features = []}
+rand = "^0.9"
+
+[[bin]]
+name = "emulator"
+path = "src/bin/main.rs"
