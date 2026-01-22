@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 
-use crate::{Mem, bus::Bus, cartridge::Rom, utils};
+use crate::{Mem, bus::Bus, utils};
 
 use crate::opcodes::{
     AddressMode::{self, *},
@@ -38,30 +38,18 @@ bitflags! {
     }
 }
 
-pub struct CPU {
+pub struct CPU<'a> {
     pub pc: u16,
     pub reg_a: u8,
     pub reg_x: u8,
     pub reg_y: u8,
     pub sp: u8,
     pub status: CpuFlags,
-    bus: Bus,
+    bus: Bus<'a>,
 }
 
-impl CPU {
-    pub fn new(rom: Rom) -> Self {
-        CPU {
-            pc: 0,
-            reg_a: 0,
-            reg_x: 0,
-            reg_y: 0,
-            sp: STACK_RESET,
-            status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
-            bus: Bus::new(rom),
-        }
-    }
-
-    pub fn with_bus(bus: Bus) -> Self {
+impl<'a> CPU<'a> {
+    pub fn with_bus(bus: Bus<'a>) -> Self {
         CPU {
             pc: 0,
             reg_a: 0,
@@ -689,7 +677,7 @@ impl CPU {
     }
 }
 
-impl Mem for CPU {
+impl<'a> Mem for CPU<'a> {
     fn read_u8(&mut self, addr: u16) -> u8 {
         self.bus.read_u8(addr)
     }

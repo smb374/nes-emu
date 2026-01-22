@@ -36,19 +36,22 @@ use crate::{
 
 const RAM_BASE: u16 = 0x0000;
 const RAM_MIRRORS_END: u16 = 0x1FFF;
-const PPU_REGISTERS: u16 = 0x2000;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 
-pub struct Bus {
+pub struct Bus<'call> {
     vram: [u8; 0x800],
     rom: Rom,
     ppu: PPU,
 
     cycles: usize,
+    cb: Box<dyn FnMut(&PPU) + 'call>,
 }
 
-impl Bus {
-    pub fn new(rom: Rom) -> Self {
+impl<'call> Bus<'call> {
+    pub fn new<F>(rom: Rom, f: F) -> Self
+    where
+        F: FnMut(&PPU) + 'call,
+    {
         let ppu = PPU::new(Arc::clone(&rom.chr_rom), Mirroring::Horizontal);
         Self {
             vram: [0u8; 0x800],
@@ -56,6 +59,7 @@ impl Bus {
             ppu,
 
             cycles: 0,
+            cb: Box::new(f),
         }
     }
 
@@ -70,7 +74,14 @@ impl Bus {
 
     pub fn tick(&mut self, cycles: u8) {
         self.cycles += cycles as usize;
+
+        let nmi_before = self.ppu.nmi_interrupt.is_some();
         self.ppu.tick(cycles * 3);
+        let nmi_after = self.ppu.nmi_interrupt.is_some();
+
+        if !nmi_before && nmi_after {
+            (self.cb)(&self.ppu);
+        }
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
@@ -78,7 +89,7 @@ impl Bus {
     }
 }
 
-impl Mem for Bus {
+impl<'call> Mem for Bus<'call> {
     fn read_u8(&mut self, addr: u16) -> u8 {
         match addr {
             RAM_BASE..=RAM_MIRRORS_END => {
@@ -100,7 +111,7 @@ impl Mem for Bus {
             0x8000..=0xFFFF => self.read_prg_rom(addr),
 
             _ => {
-                eprintln!("Ignoring mem access at {}", addr);
+                // eprintln!("Ignoring mem access at {}", addr);
                 0
             }
         }
@@ -145,7 +156,7 @@ impl Mem for Bus {
             0x8000..=0xFFFF => panic!("Attempt to write to Cartridge ROM space: {:x}", addr),
 
             _ => {
-                eprintln!("Ignoring mem write-access at {}", addr);
+                // eprintln!("Ignoring mem write-access at {}", addr);
             }
         }
     }

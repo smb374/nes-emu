@@ -10,52 +10,54 @@ use bitflags::bitflags;
 //   ++-++++--++++-++++- VRAM address
 pub struct AddrRegister {
     value: (u8, u8),
-    latch: bool,
+    hi_ptr: bool,
 }
 
 impl AddrRegister {
     pub fn new() -> Self {
         AddrRegister {
             value: (0, 0), // high byte first, lo byte second
-            latch: true,
+            hi_ptr: true,
         }
     }
+
     fn set(&mut self, data: u16) {
         self.value.0 = (data >> 8) as u8;
-        self.value.1 = (data & 0xFF) as u8;
+        self.value.1 = (data & 0xff) as u8;
     }
 
     pub fn update(&mut self, data: u8) {
-        if self.latch {
+        if self.hi_ptr {
             self.value.0 = data;
         } else {
             self.value.1 = data;
         }
 
-        if self.get() > 0x3FFF {
-            self.set(self.get() & 0x3FFF);
+        if self.get() > 0x3fff {
+            //mirror down addr above 0x3fff
+            self.set(self.get() & 0b11111111111111);
         }
-        self.latch = !self.latch;
+
+        self.hi_ptr = !self.hi_ptr;
     }
 
     pub fn increment(&mut self, inc: u8) {
-        let (nlo, car) = self.value.1.overflowing_add(inc);
-        self.value.1 = nlo;
-        if car {
+        let lo = self.value.1;
+        self.value.1 = self.value.1.wrapping_add(inc);
+        if lo > self.value.1 {
             self.value.0 = self.value.0.wrapping_add(1);
         }
-        if self.get() > 0x3FFF {
-            self.set(self.get() & 0x3FFF);
+        if self.get() > 0x3fff {
+            self.set(self.get() & 0b11111111111111); //mirror down addr above 0x3fff
         }
     }
 
     pub fn reset_latch(&mut self) {
-        self.latch = true;
+        self.hi_ptr = true;
     }
 
     pub fn get(&self) -> u16 {
-        // ((self.value.0 as u16) << 8) | (self.value.1 as u16)
-        u16::from_be_bytes([self.value.0, self.value.1])
+        ((self.value.0 as u16) << 8) | (self.value.1 as u16)
     }
 }
 
@@ -95,12 +97,58 @@ impl ControlRegister {
         Self::from_bits_truncate(0b00000000)
     }
 
+    pub fn nametable_addr(&self) -> u16 {
+        match self.bits() & 0b11 {
+            0 => 0x2000,
+            1 => 0x2400,
+            2 => 0x2800,
+            3 => 0x2c00,
+            _ => panic!("not possible"),
+        }
+    }
+
     pub fn vram_addr_increment(&self) -> u8 {
         if !self.contains(Self::VRAM_ADD_INCREMENT) {
             1
         } else {
             32
         }
+    }
+
+    pub fn sprt_pattern_addr(&self) -> u16 {
+        if !self.contains(Self::SPRITE_PATTERN_ADDR) {
+            0
+        } else {
+            0x1000
+        }
+    }
+
+    pub fn bknd_pattern_addr(&self) -> u16 {
+        if !self.contains(Self::BACKROUND_PATTERN_ADDR) {
+            0
+        } else {
+            0x1000
+        }
+    }
+
+    pub fn sprite_size(&self) -> u8 {
+        if !self.contains(Self::SPRITE_SIZE) {
+            8
+        } else {
+            16
+        }
+    }
+
+    pub fn master_slave_select(&self) -> u8 {
+        if !self.contains(Self::SPRITE_SIZE) {
+            0
+        } else {
+            1
+        }
+    }
+
+    pub fn generate_vblank_nmi(&self) -> bool {
+        return self.contains(Self::GENERATE_NMI);
     }
 
     pub fn update(&mut self, data: u8) {
@@ -129,10 +177,16 @@ bitflags! {
         const LEFTMOST_8PXL_SP  = 0b00000100;
         const SHOW_BACKGROUND   = 0b00001000;
         const SHOW_SPRITE       = 0b00010000;
-        const EMPHASIZE_RED     = 0b00100000;
-        const EMPHASIZE_GREEN   = 0b01000000;
-        const EMPHASIZE_BLUE    = 0b10000000;
+        const EMPHASISE_RED     = 0b00100000;
+        const EMPHASISE_GREEN   = 0b01000000;
+        const EMPHASISE_BLUE    = 0b10000000;
     }
+}
+
+pub enum Color {
+    Red,
+    Green,
+    Blue,
 }
 
 impl MaskRegister {
@@ -140,12 +194,39 @@ impl MaskRegister {
         Self::from_bits_truncate(0b00000000)
     }
 
-    pub fn emphasize(&self) -> (bool, bool, bool) {
-        (
-            self.contains(Self::EMPHASIZE_RED),
-            self.contains(Self::EMPHASIZE_GREEN),
-            self.contains(Self::EMPHASIZE_BLUE),
-        )
+    pub fn is_grayscale(&self) -> bool {
+        self.contains(Self::GREYSCALE)
+    }
+
+    pub fn leftmost_8pxl_background(&self) -> bool {
+        self.contains(Self::LEFTMOST_8PXL_BG)
+    }
+
+    pub fn leftmost_8pxl_sprite(&self) -> bool {
+        self.contains(Self::LEFTMOST_8PXL_SP)
+    }
+
+    pub fn show_background(&self) -> bool {
+        self.contains(Self::SHOW_BACKGROUND)
+    }
+
+    pub fn show_sprites(&self) -> bool {
+        self.contains(Self::SHOW_SPRITE)
+    }
+
+    pub fn emphasise(&self) -> Vec<Color> {
+        let mut result = Vec::<Color>::new();
+        if self.contains(Self::EMPHASISE_RED) {
+            result.push(Color::Red);
+        }
+        if self.contains(Self::EMPHASISE_BLUE) {
+            result.push(Color::Blue);
+        }
+        if self.contains(Self::EMPHASISE_GREEN) {
+            result.push(Color::Green);
+        }
+
+        result
     }
 
     pub fn update(&mut self, data: u8) {
@@ -173,17 +254,31 @@ bitflags! {
 
 impl StatusRegister {
     pub fn new() -> Self {
-        Self::from_bits_truncate(0b10100000)
+        Self::from_bits_truncate(0b00000000)
     }
 
-    pub fn read_vblank(&mut self) -> bool {
-        let res = self.contains(Self::VBLANK);
+    pub fn set_vblank_status(&mut self, status: bool) {
+        self.set(Self::VBLANK, status);
+    }
+
+    pub fn set_sprite_zero_hit(&mut self, status: bool) {
+        self.set(Self::SPRITE_ZERO_HIT, status);
+    }
+
+    pub fn set_sprite_overflow(&mut self, status: bool) {
+        self.set(Self::SPRITE_OVERFLOW, status);
+    }
+
+    pub fn reset_vblank_status(&mut self) {
         self.remove(Self::VBLANK);
-        res
     }
 
-    pub fn update(&mut self, data: u8) {
-        *self = Self::from_bits_retain(data);
+    pub fn is_in_vblank(&self) -> bool {
+        self.contains(Self::VBLANK)
+    }
+
+    pub fn snapshot(&self) -> u8 {
+        self.bits()
     }
 }
 

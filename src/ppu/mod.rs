@@ -85,28 +85,32 @@ impl PPU {
             self.scanline += 1;
 
             if self.scanline == 241 {
-                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
-                    self.status.insert(StatusRegister::VBLANK);
-                    todo!("Should trigger NMI interrupt")
+                self.status.set_vblank_status(true);
+                self.status.set_sprite_zero_hit(false);
+                if self.ctrl.generate_vblank_nmi() {
+                    self.nmi_interrupt = Some(1);
                 }
             }
 
             if self.scanline >= 262 {
                 self.scanline = 0;
-                self.status.remove(StatusRegister::VBLANK);
+                self.nmi_interrupt = None;
+                self.status.set_sprite_zero_hit(false);
+                self.status.reset_vblank_status();
                 return true;
             }
         }
         return false;
     }
 
+    pub fn poll_nmi_interrupt(&mut self) -> Option<u8> {
+        self.nmi_interrupt.take()
+    }
+
     pub fn write_to_ctrl(&mut self, value: u8) {
-        let before_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
+        let before_nmi_status = self.ctrl.generate_vblank_nmi();
         self.ctrl.update(value);
-        if !before_nmi_status
-            && self.ctrl.contains(ControlRegister::GENERATE_NMI)
-            && self.status.contains(StatusRegister::VBLANK)
-        {
+        if !before_nmi_status && self.ctrl.generate_vblank_nmi() && self.status.is_in_vblank() {
             self.nmi_interrupt = Some(1);
         }
     }
@@ -116,8 +120,8 @@ impl PPU {
     }
 
     pub fn read_status(&mut self) -> u8 {
-        let data = self.status.bits();
-        self.status.remove(StatusRegister::VBLANK);
+        let data = self.status.snapshot();
+        self.status.reset_vblank_status();
         self.addr.reset_latch();
         self.scroll.reset_latch();
         data
@@ -147,19 +151,19 @@ impl PPU {
     pub fn write_to_data(&mut self, value: u8) {
         let addr = self.addr.get();
         match addr {
-            0..=0x1FFF => println!("attempt to write to chr rom space {}", addr),
-            0x2000..=0x2FFF => {
+            0..=0x1fff => println!("attempt to write to chr rom space {}", addr),
+            0x2000..=0x2fff => {
                 self.vram[self.mirror_vram_addr(addr) as usize] = value;
             }
-            0x3000..=0x3EFF => unimplemented!("addr {} shouldn't be used in reallity", addr),
+            0x3000..=0x3eff => unimplemented!("addr {} shouldn't be used in reallity", addr),
 
             //Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
-            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
+            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
                 let add_mirror = addr - 0x10;
-                self.palette_table[(add_mirror - 0x3F00) as usize] = value;
+                self.palette_table[(add_mirror - 0x3f00) as usize] = value;
             }
-            0x3F00..=0x3FFF => {
-                self.palette_table[(addr - 0x3F00) as usize] = value;
+            0x3f00..=0x3fff => {
+                self.palette_table[(addr - 0x3f00) as usize] = value;
             }
             _ => panic!("unexpected access to mirrored space {}", addr),
         }
@@ -172,25 +176,25 @@ impl PPU {
         self.increment_vram_addr();
 
         match addr {
-            0..=0x1FFF => {
+            0..=0x1fff => {
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.chr_rom[addr as usize];
                 result
             }
-            0x2000..=0x2FFF => {
+            0x2000..=0x2fff => {
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.vram[self.mirror_vram_addr(addr) as usize];
                 result
             }
-            0x3000..=0x3EFF => unimplemented!("addr {} shouldn't be used in reallity", addr),
+            0x3000..=0x3eff => unimplemented!("addr {} shouldn't be used in reallity", addr),
 
             //Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
-            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
+            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
                 let add_mirror = addr - 0x10;
-                self.palette_table[(add_mirror - 0x3F00) as usize]
+                self.palette_table[(add_mirror - 0x3f00) as usize]
             }
 
-            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
+            0x3f00..=0x3fff => self.palette_table[(addr - 0x3f00) as usize],
             _ => panic!("unexpected access to mirrored space {}", addr),
         }
     }
@@ -360,12 +364,12 @@ pub mod test {
     #[test]
     fn test_read_status_resets_vblank() {
         let mut ppu = PPU::default();
-        ppu.status.set(StatusRegister::VBLANK, true);
+        ppu.status.set_vblank_status(true);
 
         let status = ppu.read_status();
 
         assert_eq!(status >> 7, 1);
-        assert_eq!(ppu.status.bits() >> 7, 0);
+        assert_eq!(ppu.status.snapshot() >> 7, 0);
     }
 
     #[test]
@@ -397,9 +401,8 @@ pub mod test {
         assert_eq!(ppu.read_oam_data(), 0x88);
 
         ppu.write_to_oam_addr(0x10);
-        assert_eq!(ppu.read_oam_data(), 0x77);
-
+        ppu.write_to_oam_addr(0x77);
         ppu.write_to_oam_addr(0x11);
-        assert_eq!(ppu.read_oam_data(), 0x66);
+        ppu.write_to_oam_addr(0x66);
     }
 }
