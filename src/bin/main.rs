@@ -39,7 +39,7 @@ fn main() {
         .unwrap();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("ice_climber.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
     let mut frame = Frame::new();
@@ -61,11 +61,13 @@ fn main() {
                 } => std::process::exit(0),
                 Event::KeyDown { keycode, .. } => {
                     if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
+                        eprintln!("Key Down {:?}", key);
                         joypad.set_button_status(key, true);
                     }
                 }
                 Event::KeyUp { keycode, .. } => {
                     if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
+                        eprintln!("Key Up {:?}", key);
                         joypad.set_button_status(key, false);
                     }
                 }

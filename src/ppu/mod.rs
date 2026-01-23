@@ -81,6 +81,10 @@ impl PPU {
     pub fn tick(&mut self, cycles: u16) -> bool {
         self.cycles += cycles as usize;
         if self.cycles >= 341 {
+            if self.is_sprite_0_hit(self.cycles) {
+                self.status.set(StatusRegister::SPRITE_ZERO_HIT, true);
+            }
+
             self.cycles = self.cycles - 341;
             self.scanline += 1;
 
@@ -103,6 +107,12 @@ impl PPU {
         return false;
     }
 
+    fn is_sprite_0_hit(&self, cycle: usize) -> bool {
+        let y = self.oam_data[0] as usize;
+        let x = self.oam_data[3] as usize;
+        (y == self.scanline as usize) && x <= cycle && self.mask.show_sprites()
+    }
+
     pub fn poll_nmi_interrupt(&mut self) -> Option<u8> {
         self.nmi_interrupt.take()
     }
@@ -116,6 +126,10 @@ impl PPU {
         {
             self.nmi_interrupt = Some(1);
         }
+    }
+
+    pub fn read_mask(&self) -> u8 {
+        self.mask.bits()
     }
 
     pub fn write_to_mask(&mut self, value: u8) {
