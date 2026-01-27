@@ -46,10 +46,11 @@ pub struct CPU<'a> {
     pub sp: u8,
     pub status: CpuFlags,
     bus: Bus<'a>,
+    irq_sig: bool,
 }
 
 impl<'a> CPU<'a> {
-    pub fn with_bus(bus: Bus<'a>) -> Self {
+    pub fn new(bus: Bus<'a>) -> Self {
         CPU {
             pc: 0,
             reg_a: 0,
@@ -58,6 +59,7 @@ impl<'a> CPU<'a> {
             sp: STACK_RESET,
             status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
             bus,
+            irq_sig: false,
         }
     }
 
@@ -90,6 +92,9 @@ impl<'a> CPU<'a> {
         loop {
             if let Some(_nmi) = self.bus.poll_nmi_status() {
                 self.interrupt_nmi();
+            } else if self.irq_sig {
+                self.irq_sig = false;
+                self.interrupt_irq();
             }
             cb(self);
             let opcode = self.read_u8(self.pc);
@@ -152,7 +157,6 @@ impl<'a> CPU<'a> {
                         self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
                         self.status.insert(CpuFlags::INTR_DISABLE);
                         self.pc += 1;
-                        // self.jmp = Some(self.read_u16(0xFFFE));
                         break;
                     }
                     BVC => self.branch_if(!self.status.contains(CpuFlags::OVERFLOW)),
@@ -575,7 +579,7 @@ impl<'a> CPU<'a> {
                     }
                 }
 
-                self.bus.tick(op.cycles);
+                self.irq_sig = self.irq_sig || self.bus.tick(op.cycles);
                 if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
                 }
@@ -596,6 +600,19 @@ impl<'a> CPU<'a> {
 
         self.bus.tick(2);
         self.pc = self.read_u16(0xFFFA);
+    }
+
+    fn interrupt_irq(&mut self) {
+        self.push_stack_u16(self.pc);
+        let mut flag = self.status.clone();
+        flag.set(CpuFlags::BREAK, false);
+        flag.set(CpuFlags::BREAK2, true);
+
+        self.push_stack(flag.bits());
+        self.status.insert(CpuFlags::INTR_DISABLE);
+
+        self.bus.tick(2);
+        self.pc = self.read_u16(0xFFFE);
     }
 
     fn push_stack_u16(&mut self, val: u16) {

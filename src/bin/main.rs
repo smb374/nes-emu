@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use nes_emu::{
     bus::Bus,
@@ -9,6 +12,8 @@ use nes_emu::{
     render::{self, frame::Frame},
 };
 use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum};
+
+const FRAME_DURATION: Duration = Duration::from_micros(16000);
 
 fn main() {
     let mut key_map = HashMap::new();
@@ -29,7 +34,7 @@ fn main() {
         .build()
         .unwrap();
 
-    let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+    let mut canvas = window.into_canvas().build().unwrap();
     let mut event_pump = sdl_context.event_pump().unwrap();
     canvas.set_scale(3.0, 3.0).unwrap();
 
@@ -39,10 +44,11 @@ fn main() {
         .unwrap();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("ice_climber.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("smb.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
     let mut frame = Frame::new();
+    let mut next_frame_target = Instant::now();
 
     // run the game cycle
     let bus = Bus::new(rom, move |ppu: &PPU, joypad: &mut joypad::Joypad| {
@@ -72,9 +78,26 @@ fn main() {
                 _ => { /* do nothing */ }
             }
         }
+        next_frame_target += FRAME_DURATION;
+
+        let now = Instant::now();
+
+        if now < next_frame_target {
+            std::thread::sleep(next_frame_target - now);
+        } else {
+            // We are late (lagging)!
+            // Do NOT sleep.
+
+            // Optional: If we are VERY late (e.g. > 3 frames, maybe due to
+            // window dragging or heavy load), reset the target to 'now'
+            // to prevent the emulator from running at 5000 FPS to catch up.
+            if now - next_frame_target > FRAME_DURATION * 3 {
+                next_frame_target = now;
+            }
+        }
     });
 
-    let mut cpu = CPU::with_bus(bus);
+    let mut cpu = CPU::new(bus);
 
     cpu.reset();
     cpu.run_with_cb(|_cpu| {});

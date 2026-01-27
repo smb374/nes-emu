@@ -66,7 +66,7 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self, cycles: u16) {
+    pub fn tick(&mut self, cycles: u16) -> bool {
         self.cycles += cycles as usize;
 
         let nmi_before = self.ppu.nmi_interrupt.is_some();
@@ -76,6 +76,10 @@ impl<'call> Bus<'call> {
         if !nmi_before && nmi_after {
             (self.cb)(&self.ppu, &mut self.joypad1);
         }
+
+        let irq = self.rom.borrow().irq_sig;
+        self.rom.borrow_mut().irq_sig = false;
+        irq
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
@@ -105,7 +109,7 @@ impl<'call> Mem for Bus<'call> {
             }
 
             0x4016 => self.joypad1.read(),
-            0x4017 => self.joypad2.read(),
+            0x4017 => 0x40,
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x2007;

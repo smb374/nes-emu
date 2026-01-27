@@ -149,7 +149,7 @@ mod test {
         bus.write_u8(103, 0x88);
         bus.write_u8(104, 0x00);
 
-        let mut cpu = CPU::with_bus(bus);
+        let mut cpu = CPU::new(bus);
         cpu.pc = 0x64;
         cpu.reg_a = 1;
         cpu.reg_x = 2;
@@ -186,7 +186,7 @@ mod test {
         //target cell
         bus.write_u8(0x400, 0xAA);
 
-        let mut cpu = CPU::with_bus(bus);
+        let mut cpu = CPU::new(bus);
         cpu.pc = 0x64;
         cpu.reg_y = 0;
         let mut result: Vec<String> = vec![];
