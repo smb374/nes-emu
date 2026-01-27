@@ -158,31 +158,9 @@ impl PPU {
         self.addr.update(value);
     }
 
-    pub fn write_to_data(&mut self, value: u8) {
-        let addr = self.addr.get();
-        match addr {
-            0..=0x1fff => println!("attempt to write to chr rom space {}", addr),
-            0x2000..=0x2fff => {
-                self.vram[self.mirror_vram_addr(addr) as usize] = value;
-            }
-            0x3000..=0x3eff => unimplemented!("addr {} shouldn't be used in reallity", addr),
-
-            //Addresses $3F10/$3F14/$3F18/$3F1C are mirrors of $3F00/$3F04/$3F08/$3F0C
-            0x3f10 | 0x3f14 | 0x3f18 | 0x3f1c => {
-                let add_mirror = addr - 0x10;
-                self.palette_table[(add_mirror - 0x3f00) as usize] = value;
-            }
-            0x3f00..=0x3fff => {
-                self.palette_table[(addr - 0x3f00) as usize] = value;
-            }
-            _ => panic!("unexpected access to mirrored space {}", addr),
-        }
-        self.increment_vram_addr();
-    }
-
     pub fn read_data(&mut self) -> u8 {
         let addr = self.addr.get();
-        self.addr.increment(self.ctrl.vram_addr_increment());
+        self.increment_vram_addr();
 
         match addr {
             0..=0x3EFF => {
@@ -203,7 +181,7 @@ impl PPU {
     pub fn write_data(&mut self, val: u8) {
         let addr = self.addr.get();
         self.write_vram(addr, val);
-        self.addr.increment(self.ctrl.vram_addr_increment());
+        self.increment_vram_addr();
     }
 
     pub fn write_oam_dma(&mut self, data: &[u8; 256]) {
@@ -267,18 +245,13 @@ impl PPU {
                 let mirrored_addr = self.mirror_vram_addr(addr - 0x1000);
                 self.vram[mirrored_addr as usize] = val;
             }
+
+            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1c => {
+                let add_mirror = addr - 0x10;
+                self.palette_table[(add_mirror - 0x3f00) as usize] = val;
+            }
             0x3F00..=0x3FFF => {
-                let palette_addr = (addr - 0x3F00) & 0x1F;
-                let palette_addr = if palette_addr == 0x10
-                    || palette_addr == 0x14
-                    || palette_addr == 0x18
-                    || palette_addr == 0x1C
-                {
-                    palette_addr - 0x10
-                } else {
-                    palette_addr
-                };
-                self.palette_table[palette_addr as usize] = val;
+                self.palette_table[(addr - 0x3F00) as usize] = val;
             }
             _ => {}
         }

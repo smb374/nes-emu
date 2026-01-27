@@ -149,7 +149,7 @@ impl<'call> Mem for Bus<'call> {
                 self.ppu.write_to_ppu_addr(data);
             }
             0x2007 => {
-                self.ppu.write_to_data(data);
+                self.ppu.write_data(data);
             }
 
             0x4000..=0x4013 | 0x4015 => {
@@ -179,7 +179,7 @@ impl<'call> Mem for Bus<'call> {
                 let mirror_down_addr = addr & 0x2007;
                 self.write_u8(mirror_down_addr, data);
             }
-            0x8000..=0xFFFF => panic!("Attempt to write to Cartridge ROM space: {:x}", addr),
+            0x8000..=0xFFFF => self.rom.borrow_mut().write_prg(addr, data),
 
             _ => {
                 // eprintln!("Ignoring mem write-access at {}", addr);
