@@ -1,11 +1,6 @@
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc};
 
-use crate::{
-    Mem,
-    cartridge::{Mirroring, Rom},
-    joypad::Joypad,
-    ppu::PPU,
-};
+use crate::{Mem, cartridge::Rom, joypad::Joypad, ppu::PPU};
 
 //  _______________ $10000  _______________
 // | PRG-ROM       |       |               |
@@ -37,12 +32,13 @@ use crate::{
 
 const RAM_BASE: u16 = 0x0000;
 const RAM_MIRRORS_END: u16 = 0x1FFF;
+// const PPU_REGISTERS: u16 = 0x2000;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 
 #[allow(unused)]
 pub struct Bus<'call> {
     vram: [u8; 0x800],
-    rom: Rom,
+    rom: Rc<RefCell<Rom>>,
     ppu: PPU,
 
     cycles: usize,
@@ -56,7 +52,8 @@ impl<'call> Bus<'call> {
     where
         F: FnMut(&PPU, &mut Joypad) + 'call,
     {
-        let ppu = PPU::new(Arc::clone(&rom.chr_rom), Mirroring::Horizontal);
+        let rom = Rc::new(RefCell::new(rom));
+        let ppu = PPU::new(Rc::clone(&rom));
         Self {
             vram: [0u8; 0x800],
             rom,
@@ -67,15 +64,6 @@ impl<'call> Bus<'call> {
             cycles: 0,
             cb: Box::new(f),
         }
-    }
-
-    fn read_prg_rom(&self, mut addr: u16) -> u8 {
-        addr -= 0x8000;
-        if self.rom.prg_rom.len() == 0x4000 && addr >= 0x4000 {
-            // mirror if needed
-            addr = addr % 0x4000;
-        }
-        self.rom.prg_rom[addr as usize]
     }
 
     pub fn tick(&mut self, cycles: u16) {
@@ -123,7 +111,7 @@ impl<'call> Mem for Bus<'call> {
                 let mirror_down_addr = addr & 0x2007;
                 self.read_u8(mirror_down_addr)
             }
-            0x8000..=0xFFFF => self.read_prg_rom(addr),
+            0x8000..=0xFFFF => self.rom.borrow_mut().read_prg(addr),
 
             _ => {
                 // eprintln!("Ignoring mem access at {}", addr);

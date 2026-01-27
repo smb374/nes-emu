@@ -25,6 +25,5 @@ target
 
 /target
 
+*.log
 *.nes
-!snake.nes
-!nestest.nes

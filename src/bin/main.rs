@@ -61,13 +61,11 @@ fn main() {
                 } => std::process::exit(0),
                 Event::KeyDown { keycode, .. } => {
                     if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
-                        eprintln!("Key Down {:?}", key);
                         joypad.set_button_status(key, true);
                     }
                 }
                 Event::KeyUp { keycode, .. } => {
                     if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
-                        eprintln!("Key Up {:?}", key);
                         joypad.set_button_status(key, false);
                     }
                 }

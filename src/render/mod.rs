@@ -1,7 +1,7 @@
 pub mod frame;
 pub mod palette;
 
-use crate::{cartridge::Mirroring, ppu::PPU, render::frame::Frame};
+use crate::{mapper::Mirroring, ppu::PPU, render::frame::Frame};
 
 fn bg_pallette(ppu: &PPU, attribute_table: &[u8], tile_column: usize, tile_row: usize) -> [u8; 4] {
     let attr_table_idx = tile_row / 4 * 8 + tile_column / 4;
@@ -68,8 +68,11 @@ fn render_name_table(
         let tile_column = i % 32;
         let tile_row = i / 32;
         let tile_idx = name_table[i] as u16;
-        let tile =
-            &ppu.chr_rom[(bank + tile_idx * 16) as usize..=(bank + tile_idx * 16 + 15) as usize];
+        let tile_addr = bank + tile_idx * 16;
+        let mut tile = [0u8; 16];
+        for j in 0..16 {
+            tile[j] = ppu.rom.borrow().read_chr(tile_addr + j as u16);
+        }
         let palette = bg_pallette(ppu, attribute_table, tile_column, tile_row);
 
         for y in 0..=7 {
@@ -110,7 +113,7 @@ pub fn render(ppu: &PPU, frame: &mut Frame) {
     let scroll_x = (ppu.scroll.scroll_x) as usize;
     let scroll_y = (ppu.scroll.scroll_y) as usize;
 
-    let (main_nametable, second_nametable) = match (&ppu.mirroring, ppu.ctrl.nametable_addr()) {
+    let (main_nametable, second_nametable) = match (ppu.mirroring(), ppu.ctrl.nametable_addr()) {
         (Mirroring::Vertical, 0x2000)
         | (Mirroring::Vertical, 0x2800)
         | (Mirroring::Horizontal, 0x2000)
@@ -120,7 +123,7 @@ pub fn render(ppu: &PPU, frame: &mut Frame) {
         | (Mirroring::Horizontal, 0x2800)
         | (Mirroring::Horizontal, 0x2C00) => (&ppu.vram[0x400..0x800], &ppu.vram[0..0x400]),
         (_, _) => {
-            panic!("Not supported mirroring type {:?}", ppu.mirroring);
+            panic!("Not supported mirroring type {:?}", ppu.mirroring());
         }
     };
 
@@ -171,8 +174,11 @@ pub fn render(ppu: &PPU, frame: &mut Frame) {
         let sprite_palette = sprite_palette(ppu, pallette_idx);
         let bank: u16 = ppu.ctrl.sprt_pattern_addr();
 
-        let tile =
-            &ppu.chr_rom[(bank + tile_idx * 16) as usize..=(bank + tile_idx * 16 + 15) as usize];
+        let tile_addr = bank + tile_idx * 16;
+        let mut tile = [0u8; 16];
+        for j in 0..16 {
+            tile[j] = ppu.rom.borrow().read_chr(tile_addr + j as u16);
+        }
 
         for y in 0..=7 {
             let mut upper = tile[y];
