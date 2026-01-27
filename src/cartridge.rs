@@ -98,7 +98,6 @@ impl Rom {
             // CHR-ROM
             Box::from(&raw[chr_rom_start..(chr_rom_start + chr_data_size)])
         };
-        eprintln!("CHR-ROM = {:?}", chr_data);
 
         Ok(Rom {
             prg_rom: Box::from(&raw[prg_rom_start..(prg_rom_start + prg_rom_size)]),
