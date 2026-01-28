@@ -241,6 +241,15 @@ impl PPU {
                     // Copy horizontal scroll from t to v
                     self.internal.copy_horizontal();
                 }
+
+                // Notify mapper of PPU address changes (for MMC3 scanline counter)
+                // MMC3 counts A12 transitions during tile fetching
+                // Simulate 42 tile fetches per scanline (32 background + ~10 sprite evaluations)
+                for _ in 0..42 {
+                    self.rom.borrow_mut().ppu_tick(0x0000);  // A12=0 (pattern table $0xxx)
+                    self.rom.borrow_mut().ppu_tick(0x1000);  // A12=1 (pattern table $1xxx)
+                }
+
                 // Render the completed scanline
                 self.render_scanline();
             }
@@ -253,6 +262,12 @@ impl PPU {
                     }
                     // Copy vertical scroll from t to v
                     self.internal.copy_vertical();
+
+                    // Notify mapper of PPU address changes on pre-render scanline too
+                    for _ in 0..42 {
+                        self.rom.borrow_mut().ppu_tick(0x0000);
+                        self.rom.borrow_mut().ppu_tick(0x1000);
+                    }
                 }
                 // Clear VBlank and sprite 0 hit flags
                 self.status.remove(StatusRegister::VBLANK_STARTED);
