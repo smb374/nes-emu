@@ -6,7 +6,7 @@ use std::{
 use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
 use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum};
 
-const FRAME_DURATION: Duration = Duration::from_micros(16000);
+const FRAME_DURATION: Duration = Duration::from_micros(16639);
 
 fn main() {
     let mut key_map = HashMap::new();
@@ -37,7 +37,7 @@ fn main() {
         .unwrap();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("smb.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
     let mut next_frame_target = Instant::now();
