@@ -2,65 +2,6 @@
 
 use bitflags::bitflags;
 
-// 1st write  2nd write
-// 15 bit  8  7  bit  0
-// ---- ----  ---- ----
-// ..AA AAAA  AAAA AAAA
-//   || ||||  |||| ||||
-//   ++-++++--++++-++++- VRAM address
-pub struct AddrRegister {
-    value: (u8, u8),
-    latch: bool,
-}
-
-impl AddrRegister {
-    pub fn new() -> Self {
-        AddrRegister {
-            value: (0, 0), // high byte first, lo byte second
-            latch: true,
-        }
-    }
-
-    fn set(&mut self, data: u16) {
-        self.value.0 = (data >> 8) as u8;
-        self.value.1 = (data & 0xff) as u8;
-    }
-
-    pub fn update(&mut self, data: u8) {
-        if self.latch {
-            self.value.0 = data;
-        } else {
-            self.value.1 = data;
-        }
-
-        if self.get() > 0x3fff {
-            //mirror down addr above 0x3fff
-            self.set(self.get() & 0b11111111111111);
-        }
-
-        self.latch = !self.latch;
-    }
-
-    pub fn increment(&mut self, inc: u8) {
-        let lo = self.value.1;
-        self.value.1 = self.value.1.wrapping_add(inc);
-        if lo > self.value.1 {
-            self.value.0 = self.value.0.wrapping_add(1);
-        }
-        if self.get() > 0x3fff {
-            self.set(self.get() & 0b11111111111111); //mirror down addr above 0x3fff
-        }
-    }
-
-    pub fn reset_latch(&mut self) {
-        self.latch = true;
-    }
-
-    pub fn get(&self) -> u16 {
-        ((self.value.0 as u16) << 8) | (self.value.1 as u16)
-    }
-}
-
 bitflags! {
     // 7  bit  0
     // ---- ----
@@ -229,44 +170,163 @@ impl StatusRegister {
     }
 }
 
-// 1st write
-// 7  bit  0
-// ---- ----
-// XXXX XXXX
-// |||| ||||
-// ++++-++++- X scroll bits 7-0 (bit 8 in PPUCTRL bit 0)
+// PPU internal registers
+// The PPU has internal registers that are shared between PPUSCROLL and PPUADDR writes:
 //
-// 2nd write
-// 7  bit  0
-// ---- ----
-// YYYY YYYY
-// |||| ||||
-// ++++-++++- Y scroll bits 7-0 (bit 8 in PPUCTRL bit 1)
-pub struct ScrollRegister {
-    pub scroll_x: u8,
-    pub scroll_y: u8,
-    pub latch: bool,
+// v: Current VRAM address (15 bits)
+// t: Temporary VRAM address (15 bits); can be thought of as the address of the top left onscreen tile
+// x: Fine X scroll (3 bits)
+// w: Write latch (1 bit); determines whether the next write is the first or second write
+//
+// Register format:
+// yyy NN YYYYY XXXXX
+// ||| || ||||| +++++-- coarse X scroll (tile column: 0-31)
+// ||| || +++++-------- coarse Y scroll (tile row: 0-29)
+// ||| ++-------------- nametable select (0-3)
+// +++----------------- fine Y scroll (pixel row within tile: 0-7)
+pub struct InternalRegisters {
+    v: u16,     // Current VRAM address
+    t: u16,     // Temporary VRAM address
+    fine_x: u8, // Fine X scroll (3 bits)
+    w: bool,    // Write latch
 }
 
-impl ScrollRegister {
+impl InternalRegisters {
     pub fn new() -> Self {
-        ScrollRegister {
-            scroll_x: 0,
-            scroll_y: 0,
-            latch: false,
+        InternalRegisters {
+            v: 0,
+            t: 0,
+            fine_x: 0,
+            w: false,
         }
     }
 
-    pub fn write(&mut self, data: u8) {
-        if !self.latch {
-            self.scroll_x = data;
+    // PPUSCROLL write
+    pub fn write_scroll(&mut self, data: u8) {
+        if !self.w {
+            // First write: X scroll
+            // t: ....... ...XXXXX <- data[7:3]
+            // x:              XXX <- data[2:0]
+            self.t = (self.t & 0xFFE0) | ((data as u16) >> 3);
+            self.fine_x = data & 0x07;
         } else {
-            self.scroll_y = data;
+            // Second write: Y scroll
+            // t: XXX..YY YYY..... <- data[7:0]
+            self.t = (self.t & 0x8FFF) | (((data as u16) & 0x07) << 12); // Fine Y
+            self.t = (self.t & 0xFC1F) | (((data as u16) & 0xF8) << 2); // Coarse Y
         }
-        self.latch = !self.latch;
+        self.w = !self.w;
     }
 
+    // PPUADDR write
+    pub fn write_addr(&mut self, data: u8) {
+        if !self.w {
+            // First write: high byte
+            // t: .CDEFGH ........ <- data[5:0]
+            // t: X...... ........ <- 0
+            self.t = (self.t & 0x00FF) | (((data as u16) & 0x3F) << 8);
+        } else {
+            // Second write: low byte
+            // t: ....... ABCDEFGH <- data[7:0]
+            // v: <...t...>        <- t
+            self.t = (self.t & 0xFF00) | (data as u16);
+            self.v = self.t;
+        }
+        self.w = !self.w;
+    }
+
+    // Reset write latch (on PPUSTATUS read)
     pub fn reset_latch(&mut self) {
-        self.latch = false;
+        self.w = false;
+    }
+
+    // Get current VRAM address
+    pub fn get_v(&self) -> u16 {
+        self.v & 0x3FFF
+    }
+
+    // Set VRAM address directly (for increment)
+    pub fn set_v(&mut self, addr: u16) {
+        self.v = addr & 0x3FFF;
+    }
+
+    // Increment VRAM address
+    pub fn increment_v(&mut self, inc: u8) {
+        self.v = self.v.wrapping_add(inc as u16) & 0x3FFF;
+    }
+
+    // Update nametable bits from PPUCTRL
+    pub fn update_nametable_from_ctrl(&mut self, ctrl_bits: u8) {
+        // t: ....BA.. ........ <- ctrl[1:0]
+        self.t = (self.t & 0xF3FF) | (((ctrl_bits as u16) & 0x03) << 10);
+    }
+
+    // Coarse X increment (during rendering)
+    pub fn increment_x(&mut self) {
+        if (self.v & 0x001F) == 31 {
+            // Wrap coarse X and switch horizontal nametable
+            self.v &= !0x001F;
+            self.v ^= 0x0400;
+        } else {
+            self.v += 1;
+        }
+    }
+
+    // Y increment (at end of scanline during rendering)
+    pub fn increment_y(&mut self) {
+        if (self.v & 0x7000) != 0x7000 {
+            // Increment fine Y
+            self.v += 0x1000;
+        } else {
+            // Fine Y overflow
+            self.v &= !0x7000;
+            let mut y = (self.v & 0x03E0) >> 5;
+            if y == 29 {
+                y = 0;
+                self.v ^= 0x0800; // Switch vertical nametable
+            } else if y == 31 {
+                y = 0;
+            } else {
+                y += 1;
+            }
+            self.v = (self.v & !0x03E0) | (y << 5);
+        }
+    }
+
+    // Copy horizontal bits from t to v
+    pub fn copy_horizontal(&mut self) {
+        // v: .....N.. ...XXXXX <- t: .....N.. ...XXXXX
+        self.v = (self.v & 0xFBE0) | (self.t & 0x041F);
+    }
+
+    // Copy vertical bits from t to v
+    pub fn copy_vertical(&mut self) {
+        // v: .YYYNN.Y YYY..... <- t: .YYYNN.Y YYY.....
+        self.v = (self.v & 0x841F) | (self.t & 0x7BE0);
+    }
+
+    // Extract components for rendering
+    pub fn coarse_x(&self) -> u8 {
+        (self.v & 0x001F) as u8
+    }
+
+    pub fn coarse_y(&self) -> u8 {
+        ((self.v & 0x03E0) >> 5) as u8
+    }
+
+    pub fn fine_x(&self) -> u8 {
+        self.fine_x
+    }
+
+    pub fn fine_y(&self) -> u8 {
+        ((self.v & 0x7000) >> 12) as u8
+    }
+
+    pub fn nametable(&self) -> u8 {
+        ((self.v & 0x0C00) >> 10) as u8
+    }
+
+    pub fn nametable_addr(&self) -> u16 {
+        0x2000 | (self.v & 0x0FFF)
     }
 }

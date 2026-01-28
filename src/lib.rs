@@ -5,7 +5,6 @@ pub mod joypad;
 pub mod mapper;
 pub mod opcodes;
 pub mod ppu;
-pub mod render;
 pub mod trace;
 pub mod utils;
 

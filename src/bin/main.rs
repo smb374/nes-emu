@@ -3,14 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nes_emu::{
-    bus::Bus,
-    cartridge::Rom,
-    cpu::CPU,
-    joypad,
-    ppu::PPU,
-    render::{self, frame::Frame},
-};
+use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
 use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum};
 
 const FRAME_DURATION: Duration = Duration::from_micros(16000);
@@ -44,16 +37,17 @@ fn main() {
         .unwrap();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("smb.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("pacman.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
-    let mut frame = Frame::new();
     let mut next_frame_target = Instant::now();
 
     // run the game cycle
     let bus = Bus::new(rom, move |ppu: &PPU, joypad: &mut joypad::Joypad| {
-        render::render(ppu, &mut frame);
-        texture.update(None, &frame.data, 256 * 3).unwrap();
+        // Copy the frame buffer from PPU to texture
+        texture
+            .update(None, &ppu.frame_buffer[..], 256 * 3)
+            .unwrap();
 
         canvas.copy(&texture, None, None).unwrap();
 
@@ -85,12 +79,6 @@ fn main() {
         if now < next_frame_target {
             std::thread::sleep(next_frame_target - now);
         } else {
-            // We are late (lagging)!
-            // Do NOT sleep.
-
-            // Optional: If we are VERY late (e.g. > 3 frames, maybe due to
-            // window dragging or heavy load), reset the target to 'now'
-            // to prevent the emulator from running at 5000 FPS to catch up.
             if now - next_frame_target > FRAME_DURATION * 3 {
                 next_frame_target = now;
             }
