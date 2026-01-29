@@ -94,8 +94,8 @@ fn main() {
                     _ => { /* do nothing */ }
                 }
             }
-            let samples: Vec<f32> = apu.sample_buffer.drain(..).collect();
-            audio_device.queue_audio(&samples).unwrap();
+            audio_device.queue_audio(&apu.sample_buffer[..]).unwrap();
+            apu.sample_buffer.clear();
             next_frame_target += FRAME_DURATION;
 
             let now = Instant::now();
