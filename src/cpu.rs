@@ -104,10 +104,10 @@ impl<'a> CPU<'a> {
         loop {
             if let Some(_nmi) = self.bus.poll_nmi_status() {
                 self.interrupt_nmi();
-            } else if self.irq_sig {
-                self.irq_sig = false;
+            } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {
                 self.interrupt_irq();
             }
+            self.irq_sig = false;
             cb(self);
             let opcode = self.read_u8(self.pc);
             self.pc += 1;
@@ -148,6 +148,7 @@ impl<'a> CPU<'a> {
 
         self.bus.tick(2);
         self.pc = self.read_u16(0xFFFE);
+        eprintln!("Goto ($FFFE) = {:04X}", self.pc);
     }
 
     fn push_stack_u16(&mut self, val: u16) {
@@ -284,7 +285,7 @@ impl<'a> CPU<'a> {
                 self.push_stack_u16(self.pc + 1);
                 self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
                 self.status.insert(CpuFlags::INTR_DISABLE);
-                self.pc += 1;
+                self.pc = self.read_u16(0xFFFE);
             }
             BVC => self.branch_if(!self.status.contains(CpuFlags::OVERFLOW)),
             BVS => self.branch_if(self.status.contains(CpuFlags::OVERFLOW)),

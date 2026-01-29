@@ -4,9 +4,11 @@ mod units;
 
 pub use channel::TimedChannel;
 
+use crate::apu::registers::TriangleRegister;
+
 use self::{
     channel::{noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
-    registers::{APUStatus, FrameCounter, NoiseRegister, PulseRegister, TriangleRegister},
+    registers::{APUStatus, FrameCounter, NoiseRegister, PulseRegister},
 };
 
 const CPU_FREQ: f64 = 1_789_773.0;
@@ -25,7 +27,7 @@ pub struct APU {
 
     pub pulse1: PulseChannel,
     pub pulse2: PulseChannel,
-    pub triangle: TriangleChannel,
+    pub triag: TriangleChannel,
     pub noise: NoiseChannel,
 
     cycles: usize,
@@ -48,7 +50,7 @@ impl Default for APU {
 
             pulse1: PulseChannel::new(false),
             pulse2: PulseChannel::new(true),
-            triangle: TriangleChannel::new(),
+            triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
 
             cycles: 0,
@@ -71,6 +73,8 @@ impl APU {
         // Update length_enabled for each channel here.
         self.pulse1.length_enabled = self.status.contains(APUStatus::PULSE_CHANNEL1);
         self.pulse2.length_enabled = self.status.contains(APUStatus::PULSE_CHANNEL2);
+        self.triag.length_enabled = self.status.contains(APUStatus::TRIAG_CHANNEL);
+        self.noise.length_enabled = self.status.contains(APUStatus::NOISE_CHANNEL);
 
         let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
         self.frame_cycle += cycles;
@@ -91,10 +95,10 @@ impl APU {
             self.clock_frame_sequencer(new_quarter_frame);
         }
 
-        self.pulse1.clock_timer(cycles, &self.pulse1_reg);
-        self.pulse2.clock_timer(cycles, &self.pulse2_reg);
-        self.triangle.clock_timer(cycles, &self.triag_reg);
-        self.noise.clock_timer(cycles, &self.noise_reg);
+        self.pulse1.clock_timer(cycles);
+        self.pulse2.clock_timer(cycles);
+        self.triag.clock_timer(cycles);
+        self.noise.clock_timer(cycles);
 
         self.generate_samples(cycles);
     }
@@ -128,7 +132,7 @@ impl APU {
     fn clock_envelopes(&mut self) {
         self.pulse1.clock_envelope(&self.pulse1_reg);
         self.pulse2.clock_envelope(&self.pulse2_reg);
-        self.triangle.clock_linear_counter(&self.triag_reg);
+        self.triag.clock_linear_counter(&self.triag_reg);
         self.noise.clock_envelope(&self.noise_reg);
     }
 
@@ -145,7 +149,7 @@ impl APU {
             self.noise.clock_length(&self.noise_reg);
         }
         if self.status.contains(APUStatus::TRIAG_CHANNEL) {
-            self.triangle.clock_length(&self.triag_reg);
+            self.triag.clock_length(&self.triag_reg);
         }
     }
 
@@ -161,10 +165,29 @@ impl APU {
         self.sample_accumulator -= samples_to_generate as f64;
     }
 
+    pub fn read_status(&mut self) -> u8 {
+        let status = self.status.bits();
+        // Reading $4015 clears the frame IRQ flag
+        self.irq_sig = false;
+        status
+    }
+
+    pub fn write_frame_counter(&mut self, value: u8) {
+        self.frame_counter.update(value);
+        // Writing to $4017 clears the frame IRQ flag
+        self.irq_sig = false;
+
+        // If 5-step mode is set, immediately clock all units
+        if self.frame_counter.is_five_mode() {
+            self.clock_envelopes();
+            self.clock_length_and_sweep();
+        }
+    }
+
     fn mix_channels(&self) -> f32 {
         let pulse1_out = self.pulse1.output();
         let pulse2_out = self.pulse2.output();
-        let triangle_out = self.triangle.output();
+        let triangle_out = self.triag.output();
         let noise_out = self.noise.output();
 
         // Non-linear mixing (TODO: use lookup tables)

@@ -1,14 +1,9 @@
 use crate::apu::{
-    channel::TimedChannel,
     registers::PulseRegister,
     units::{envelope::Envelope, sweep::Sweep},
 };
 
-#[rustfmt::skip]
-const LENGTH_TABLE: [u8; 0x20] = [
-    10,254, 20,  2, 40,  4, 80,  6, 160,  8, 60, 10, 14, 12, 26, 14,
-    12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
-];
+use super::{LENGTH_TABLE, TimedChannel};
 
 #[rustfmt::skip]
 const DUTY_TABLE: [[u8; 8]; 4] = [
@@ -18,10 +13,8 @@ const DUTY_TABLE: [[u8; 8]; 4] = [
     [1, 0, 0, 1, 1, 1, 1, 1], // 25% negated (75% high)
 ];
 
-#[allow(unused)]
 #[derive(Debug)]
 pub struct PulseChannel {
-    is_pulse2: bool,
     envelope: Envelope,
     sweep: Sweep,
     timer_period: u16,
@@ -36,7 +29,6 @@ pub struct PulseChannel {
 impl PulseChannel {
     pub fn new(is_pulse2: bool) -> Self {
         Self {
-            is_pulse2,
             envelope: Envelope::default(),
             sweep: Sweep::new(is_pulse2),
             timer_period: 0,
@@ -48,7 +40,7 @@ impl PulseChannel {
             muted: false,
         }
     }
-    pub fn clock_timer(&mut self, cycles: usize, _reg: &PulseRegister) {
+    pub fn clock_timer(&mut self, cycles: usize) {
         for _ in 0..cycles {
             if self.timer_counter == 0 {
                 self.timer_counter = self.timer_period;

@@ -94,10 +94,8 @@ fn main() {
                     _ => { /* do nothing */ }
                 }
             }
-            if apu.sample_buffer.len() >= 512 {
-                let samples: Vec<f32> = apu.sample_buffer.drain(..512).collect();
-                audio_device.queue_audio(&samples).unwrap();
-            }
+            let samples: Vec<f32> = apu.sample_buffer.drain(..).collect();
+            audio_device.queue_audio(&samples).unwrap();
             next_frame_target += FRAME_DURATION;
 
             let now = Instant::now();
@@ -115,5 +113,7 @@ fn main() {
     let mut cpu = CPU::new(bus);
 
     cpu.reset();
-    cpu.run_with_cb(|_cpu| {});
+    cpu.run_with_cb(|_cpu| {
+        // println!("{}", nes_emu::trace::trace(_cpu));
+    });
 }

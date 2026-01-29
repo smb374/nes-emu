@@ -87,9 +87,11 @@ impl<'call> Bus<'call> {
             (self.cb)(&self.ppu, &mut self.apu, &mut self.joypad1);
         }
 
-        let irq = self.rom.borrow().irq_sig;
+        let mapper_irq = self.rom.borrow().irq_sig;
         self.rom.borrow_mut().irq_sig = false;
-        irq
+        let apu_irq = self.apu.irq_sig;
+        self.apu.irq_sig = false;
+        mapper_irq || apu_irq
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
@@ -105,8 +107,8 @@ impl<'call> Mem for Bus<'call> {
                 self.vram[mirror_down_addr as usize]
             }
             0x2000 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
-                panic!("Attempt to read from write-only PPU address {:x}", addr);
-                // 0
+                // panic!("Attempt to read from write-only PPU address {:x}", addr);
+                0
             }
             0x2001 => self.ppu.read_mask(), // Ice Climber reads this.
             0x2002 => self.ppu.read_status(),
@@ -118,10 +120,10 @@ impl<'call> Mem for Bus<'call> {
                 0
             }
 
-            0x4015 => self.apu.status.bits(),
+            0x4015 => self.apu.read_status(),
 
             0x4016 => self.joypad1.read(),
-            0x4017 => self.apu.frame_counter.bits(),
+            0x4017 => 0x40,  // $4017 is write-only, return open bus
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x2007;
@@ -186,18 +188,18 @@ impl<'call> Mem for Bus<'call> {
             0x4005 => self.apu.pulse2_reg.sweep = data,
 
             0x4002 => self.apu.pulse1.update_period_lo(data),
-            0x4006 => self.apu.pulse2.update_period_hi(data),
+            0x4006 => self.apu.pulse2.update_period_lo(data),
 
-            0x4003 => self.apu.pulse1.update_period_lo(data),
+            0x4003 => self.apu.pulse1.update_period_hi(data),
             0x4007 => self.apu.pulse2.update_period_hi(data),
 
             0x4008 => self.apu.triag_reg.counter = data,
-            0x400A => {} // Update triag timer lo
-            0x400B => {} // Update triag timer hi
+            0x400A => self.apu.triag.update_period_lo(data),
+            0x400B => self.apu.triag.update_period_hi(data),
 
             0x400C => self.apu.noise_reg.envelope = data,
-            0x400E => self.apu.noise_reg.noise = data,
-            0x400F => self.apu.noise_reg.lcload = data,
+            0x400E => self.apu.noise.update_period_lo(data),
+            0x400F => self.apu.noise.update_period_hi(data),
 
             0x4000..=0x4013 => {}
 
@@ -216,7 +218,7 @@ impl<'call> Mem for Bus<'call> {
 
             0x4016 => self.joypad1.write(data),
 
-            0x4017 => self.apu.frame_counter.update(data),
+            0x4017 => self.apu.write_frame_counter(data),
 
             0x6000..=0xFFFF => self.rom.borrow_mut().write_prg(addr, data),
 

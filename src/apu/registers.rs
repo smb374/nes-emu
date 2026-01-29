@@ -70,6 +70,4 @@ pub struct TriangleRegister {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoiseRegister {
     pub envelope: u8,
-    pub noise: u8,
-    pub lcload: u8,
 }
