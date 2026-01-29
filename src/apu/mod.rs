@@ -67,7 +67,7 @@ impl APU {
         Self::default()
     }
 
-    pub fn tick(&mut self, cycles: u8) {
+    pub fn tick(&mut self, cycles: u16) {
         let cycles = cycles as usize;
         self.cycles += cycles;
 

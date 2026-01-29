@@ -71,6 +71,8 @@ impl<'call> Bus<'call> {
     pub fn tick(&mut self, cycles: u16) -> bool {
         self.cycles += cycles as usize;
 
+        self.apu.tick(cycles);
+
         let nmi_before = self.ppu.nmi_interrupt.is_some();
         self.ppu.tick(cycles * 3);
         let nmi_after = self.ppu.nmi_interrupt.is_some();
