@@ -1,4 +1,4 @@
-use super::registers::TriangleRegister;
+use crate::apu::registers::TriangleRegister;
 
 #[derive(Debug, Default)]
 pub struct TriangleChannel {

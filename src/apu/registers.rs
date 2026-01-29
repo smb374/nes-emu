@@ -58,108 +58,18 @@ impl FrameCounter {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PulseRegister {
-    pub ctrl: u8,
+    pub envelope: u8,
     pub sweep: u8,
-    pub tl: u8,
-    pub th: u8,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TriangleRegister {
-    pub ctrl: u8,
-    pub tl: u8,
-    pub th: u8,
+    pub counter: u8,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoiseRegister {
-    pub ctrl: u8,
+    pub envelope: u8,
     pub noise: u8,
     pub lcload: u8,
-}
-
-impl PulseRegister {
-    pub fn duty(&self) -> u8 {
-        (self.ctrl & 0xC0) >> 6
-    }
-
-    pub fn loop_envelope(&self) -> bool {
-        self.ctrl & 0x20 != 0
-    }
-
-    pub fn const_volume(&self) -> bool {
-        self.ctrl & 0x10 != 0
-    }
-
-    pub fn volume(&self) -> u8 {
-        self.ctrl & 0x0F
-    }
-
-    pub fn sweep_enabled(&self) -> bool {
-        self.sweep & 0x80 != 0
-    }
-
-    pub fn sweep_period(&self) -> u8 {
-        self.sweep & 0x70 >> 4
-    }
-
-    pub fn sweep_neg(&self) -> bool {
-        self.sweep & 0x08 != 0
-    }
-
-    pub fn sweep_shift(&self) -> u8 {
-        self.sweep & 0x07
-    }
-
-    pub fn timer(&self) -> u16 {
-        self.tl as u16 | (self.th as u16 & 0x07) << 8
-    }
-
-    pub fn length_counter_load(&self) -> u8 {
-        self.th >> 3
-    }
-}
-
-impl TriangleRegister {
-    pub fn length_counter_disabled(&self) -> bool {
-        self.ctrl & 0x80 != 0
-    }
-
-    pub fn linear_counter_reload(&self) -> u8 {
-        self.ctrl & 0x7F
-    }
-
-    pub fn timer(&self) -> u16 {
-        self.tl as u16 | (self.th as u16 & 0x07) << 8
-    }
-
-    pub fn length_counter_load(&self) -> u8 {
-        self.th >> 3
-    }
-}
-
-impl NoiseRegister {
-    pub fn loop_envelope(&self) -> bool {
-        self.ctrl & 0x20 != 0
-    }
-
-    pub fn const_volume(&self) -> bool {
-        self.ctrl & 0x10 != 0
-    }
-
-    pub fn volume(&self) -> u8 {
-        self.ctrl & 0x0F
-    }
-
-    pub fn loop_noise(&self) -> bool {
-        self.noise & 0x80 != 0
-    }
-
-    pub fn noise_period(&self) -> u8 {
-        self.noise & 0x0F
-    }
-
-    pub fn length_counter_load(&self) -> u8 {
-        self.lcload >> 3
-    }
 }

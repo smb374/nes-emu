@@ -3,8 +3,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
-use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum};
+use nes_emu::{apu::APU, bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
+use sdl2::{
+    audio::{AudioQueue, AudioSpecDesired},
+    event::Event,
+    keyboard::Keycode,
+    pixels::PixelFormatEnum,
+};
 
 const FRAME_DURATION: Duration = Duration::from_micros(16639);
 
@@ -36,6 +41,18 @@ fn main() {
         .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
         .unwrap();
 
+    let desired_spec = AudioSpecDesired {
+        freq: Some(44100),
+        channels: Some(1),
+        samples: Some(512),
+    };
+    let audio_device: AudioQueue<f32> = sdl_context
+        .audio()
+        .unwrap()
+        .open_queue(None, &desired_spec)
+        .unwrap();
+    audio_device.resume();
+
     //load the game
     let bytes: Vec<u8> = std::fs::read("smb.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
@@ -43,47 +60,57 @@ fn main() {
     let mut next_frame_target = Instant::now();
 
     // run the game cycle
-    let bus = Bus::new(rom, move |ppu: &PPU, joypad: &mut joypad::Joypad| {
-        // Copy the frame buffer from PPU to texture
-        texture
-            .update(None, &ppu.frame_buffer[..], 256 * 3)
-            .unwrap();
+    let bus = Bus::new(
+        rom,
+        move |ppu: &PPU, apu: &mut APU, joypad: &mut joypad::Joypad| {
+            // Copy the frame buffer from PPU to texture
+            texture
+                .update(None, &ppu.frame_buffer[..], 256 * 3)
+                .unwrap();
 
-        canvas.copy(&texture, None, None).unwrap();
+            canvas.copy(&texture, None, None).unwrap();
 
-        canvas.present();
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => std::process::exit(0),
-                Event::KeyDown { keycode, .. } => {
-                    if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
-                        joypad.set_button_status(key, true);
+            canvas.present();
+            for event in event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => {
+                        sdl2::mixer::close_audio();
+                        std::process::exit(0);
                     }
-                }
-                Event::KeyUp { keycode, .. } => {
-                    if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
-                        joypad.set_button_status(key, false);
+                    Event::KeyDown { keycode, .. } => {
+                        if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
+                            joypad.set_button_status(key, true);
+                        }
                     }
+                    Event::KeyUp { keycode, .. } => {
+                        if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
+                            joypad.set_button_status(key, false);
+                        }
+                    }
+                    _ => { /* do nothing */ }
                 }
-                _ => { /* do nothing */ }
             }
-        }
-        next_frame_target += FRAME_DURATION;
-
-        let now = Instant::now();
-
-        if now < next_frame_target {
-            std::thread::sleep(next_frame_target - now);
-        } else {
-            if now - next_frame_target > FRAME_DURATION * 3 {
-                next_frame_target = now;
+            if apu.sample_buffer.len() >= 512 {
+                let samples: Vec<f32> = apu.sample_buffer.drain(..512).collect();
+                audio_device.queue_audio(&samples).unwrap();
             }
-        }
-    });
+            next_frame_target += FRAME_DURATION;
+
+            let now = Instant::now();
+
+            if now < next_frame_target {
+                std::thread::sleep(next_frame_target - now);
+            } else {
+                if now - next_frame_target > FRAME_DURATION * 3 {
+                    next_frame_target = now;
+                }
+            }
+        },
+    );
 
     let mut cpu = CPU::new(bus);
 

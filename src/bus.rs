@@ -1,6 +1,12 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{Mem, apu::APU, cartridge::Rom, joypad::Joypad, ppu::PPU};
+use crate::{
+    Mem,
+    apu::{APU, TimedChannel},
+    cartridge::Rom,
+    joypad::Joypad,
+    ppu::PPU,
+};
 
 //  _______________ $10000  _______________
 // | PRG-ROM       |       |               |
@@ -45,13 +51,13 @@ pub struct Bus<'call> {
     cycles: usize,
     joypad1: Joypad,
     joypad2: Joypad,
-    cb: Box<dyn FnMut(&PPU, &mut Joypad) + 'call>,
+    cb: Box<dyn FnMut(&PPU, &mut APU, &mut Joypad) + 'call>,
 }
 
 impl<'call> Bus<'call> {
     pub fn new<F>(rom: Rom, f: F) -> Self
     where
-        F: FnMut(&PPU, &mut Joypad) + 'call,
+        F: FnMut(&PPU, &mut APU, &mut Joypad) + 'call,
     {
         let rom = Rc::new(RefCell::new(rom));
         let ppu = PPU::new(Rc::clone(&rom));
@@ -78,7 +84,7 @@ impl<'call> Bus<'call> {
         let nmi_after = self.ppu.nmi_interrupt.is_some();
 
         if !nmi_before && nmi_after {
-            (self.cb)(&self.ppu, &mut self.joypad1);
+            (self.cb)(&self.ppu, &mut self.apu, &mut self.joypad1);
         }
 
         let irq = self.rom.borrow().irq_sig;
@@ -167,23 +173,29 @@ impl<'call> Mem for Bus<'call> {
                 self.write_u8(mirror_down_addr, data);
             }
 
-            0x4000 => self.apu.pulse1_reg.ctrl = data,
-            0x4004 => self.apu.pulse2_reg.ctrl = data,
+            0x4000 => {
+                self.apu.pulse1_reg.envelope = data;
+                self.apu.pulse1.update_duty(data);
+            }
+            0x4004 => {
+                self.apu.pulse2_reg.envelope = data;
+                self.apu.pulse2.update_duty(data);
+            }
 
             0x4001 => self.apu.pulse1_reg.sweep = data,
             0x4005 => self.apu.pulse2_reg.sweep = data,
 
-            0x4002 => self.apu.pulse1_reg.tl = data,
-            0x4006 => self.apu.pulse2_reg.tl = data,
+            0x4002 => self.apu.pulse1.update_period_lo(data),
+            0x4006 => self.apu.pulse2.update_period_hi(data),
 
-            0x4003 => self.apu.pulse1_reg.th = data,
-            0x4007 => self.apu.pulse2_reg.th = data,
+            0x4003 => self.apu.pulse1.update_period_lo(data),
+            0x4007 => self.apu.pulse2.update_period_hi(data),
 
-            0x4008 => self.apu.triag_reg.ctrl = data,
-            0x400A => self.apu.triag_reg.tl = data,
-            0x400B => self.apu.triag_reg.th = data,
+            0x4008 => self.apu.triag_reg.counter = data,
+            0x400A => {} // Update triag timer lo
+            0x400B => {} // Update triag timer hi
 
-            0x400C => self.apu.noise_reg.ctrl = data,
+            0x400C => self.apu.noise_reg.envelope = data,
             0x400E => self.apu.noise_reg.noise = data,
             0x400F => self.apu.noise_reg.lcload = data,
 

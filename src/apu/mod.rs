@@ -1,15 +1,12 @@
-mod noise;
-mod pulse;
+mod channel;
 pub mod registers;
-mod triag;
+mod units;
 
-use std::collections::VecDeque;
+pub use channel::TimedChannel;
 
 use self::{
-    noise::NoiseChannel,
-    pulse::PulseChannel,
+    channel::{noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
     registers::{APUStatus, FrameCounter, NoiseRegister, PulseRegister, TriangleRegister},
-    triag::TriangleChannel,
 };
 
 const CPU_FREQ: f64 = 1_789_773.0;
@@ -26,16 +23,16 @@ pub struct APU {
     pub frame_counter: FrameCounter,
     pub irq_sig: bool,
 
-    pulse1: PulseChannel,
-    pulse2: PulseChannel,
-    triangle: TriangleChannel,
-    noise: NoiseChannel,
+    pub pulse1: PulseChannel,
+    pub pulse2: PulseChannel,
+    pub triangle: TriangleChannel,
+    pub noise: NoiseChannel,
 
     cycles: usize,
     frame_cycle: usize,
 
     sample_accumulator: f64,
-    pub sample_buffer: VecDeque<f32>,
+    pub sample_buffer: Vec<f32>,
 }
 
 impl Default for APU {
@@ -57,7 +54,7 @@ impl Default for APU {
             cycles: 0,
             frame_cycle: 0,
             sample_accumulator: 0.0,
-            sample_buffer: VecDeque::with_capacity(4096),
+            sample_buffer: Vec::with_capacity(4096),
         }
     }
 }
@@ -70,6 +67,10 @@ impl APU {
     pub fn tick(&mut self, cycles: u16) {
         let cycles = cycles as usize;
         self.cycles += cycles;
+
+        // Update length_enabled for each channel here.
+        self.pulse1.length_enabled = self.status.contains(APUStatus::PULSE_CHANNEL1);
+        self.pulse2.length_enabled = self.status.contains(APUStatus::PULSE_CHANNEL2);
 
         let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
         self.frame_cycle += cycles;
@@ -154,7 +155,7 @@ impl APU {
 
         for _ in 0..samples_to_generate {
             let sample = self.mix_channels();
-            self.sample_buffer.push_back(sample);
+            self.sample_buffer.push(sample);
         }
 
         self.sample_accumulator -= samples_to_generate as f64;

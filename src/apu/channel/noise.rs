@@ -1,4 +1,4 @@
-use super::registers::NoiseRegister;
+use crate::apu::registers::NoiseRegister;
 
 #[derive(Debug, Default)]
 pub struct NoiseChannel {
