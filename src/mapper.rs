@@ -165,7 +165,7 @@ impl MMC3State {
         }
         let last_page = (prg_pages * 2) - 1;
         if self.prg_swap {
-            self.prg_map = [last_page - 1, self.prg_page[0], self.prg_page[1], last_page];
+            self.prg_map = [last_page - 1, self.prg_page[1], self.prg_page[0], last_page];
         } else {
             self.prg_map = [self.prg_page[0], self.prg_page[1], last_page - 1, last_page];
         }
