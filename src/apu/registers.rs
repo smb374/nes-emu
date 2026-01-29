@@ -6,12 +6,12 @@ bitflags! {
     pub struct APUStatus: u8 {
         const PULSE_CHANNEL1    = 0b0000_0001;
         const PULSE_CHANNEL2    = 0b0000_0010;
-        const TRIANGLE_CHANNEL  = 0b0000_0100;
+        const TRIAG_CHANNEL     = 0b0000_0100;
         const NOISE_CHANNEL     = 0b0000_1000;
         const DMC_CHANNEL       = 0b0001_0000;
         const UNUSED            = 0b0010_0000;
         const FRAME_INTERRUPT   = 0b0100_0000;
-        const INTERRUPT         = 0b1000_0000;
+        const DMC_INTERRUPT     = 0b1000_0000;
     }
 
     #[repr(transparent)]
@@ -38,13 +38,21 @@ impl Default for FrameCounter {
 
 impl APUStatus {
     pub fn update(&mut self, bits: u8) {
-        *self = Self::from_bits_retain(bits);
+        *self |= Self::from_bits_retain(bits & 0x1F);
     }
 }
 
 impl FrameCounter {
+    pub fn emit_irq(&self) -> bool {
+        !self.contains(Self::FIVE_STEP_MODE) && !self.contains(Self::IRQ_INHIBIT)
+    }
+
     pub fn update(&mut self, bits: u8) {
         *self = Self::from_bits_retain(bits);
+    }
+
+    pub fn is_five_mode(&self) -> bool {
+        self.contains(Self::FIVE_STEP_MODE)
     }
 }
 
