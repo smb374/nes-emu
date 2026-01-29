@@ -19,24 +19,24 @@ impl Default for Envelope {
 
 impl Envelope {
     // Reg: --LC.VVVV
-    pub fn clock(&mut self, reg_val: u8) {
+    pub fn clock(&mut self, loop_flag: bool, const_volume: bool, load_volume: u8) {
         if self.start_flag {
             self.decay_level = 15;
-            self.divider = reg_val & 0x0F;
+            self.divider = load_volume;
             self.start_flag = false;
         }
 
         if self.divider == 0 {
-            self.divider = reg_val & 0x0F;
-            if self.decay_level == 0 && reg_val & 0b0010_0000 != 0 {
+            self.divider = load_volume;
+            if self.decay_level == 0 && loop_flag {
                 self.decay_level = 15;
             } else {
                 self.decay_level -= 1;
             }
         }
 
-        if reg_val & 0b0001_0000 != 0 {
-            self.output = reg_val & 0x0F;
+        if const_volume {
+            self.output = load_volume;
         } else {
             self.output = self.decay_level;
         }

@@ -1,5 +1,3 @@
-use crate::apu::registers::TriangleRegister;
-
 use super::{LENGTH_TABLE, TimedChannel};
 
 // Triangle waveform: 32-step sequence
@@ -12,6 +10,8 @@ const TRIANGLE_TABLE: [u8; 32] = [
 
 #[derive(Debug)]
 pub struct TriangleChannel {
+    counter: u8,
+
     timer_period: u16,
     timer_counter: u16,
     pub length_enabled: bool,
@@ -24,6 +24,7 @@ pub struct TriangleChannel {
 impl TriangleChannel {
     pub fn new() -> Self {
         Self {
+            counter: 0,
             timer_period: 0,
             timer_counter: 0,
             length_enabled: true,
@@ -51,21 +52,21 @@ impl TriangleChannel {
         }
     }
 
-    pub fn clock_linear_counter(&mut self, reg: &TriangleRegister) {
+    pub fn clock_linear_counter(&mut self) {
         if self.linear_counter_reload_flag {
-            self.linear_counter = reg.counter & 0x7F;
+            self.linear_counter = self.counter & 0x7F;
         } else if self.linear_counter != 0 {
             self.linear_counter -= 1;
         }
 
-        if reg.counter & 0x80 == 0 {
+        if self.counter & 0x80 == 0 {
             self.linear_counter_reload_flag = false;
         }
     }
 
-    pub fn clock_length(&mut self, reg: &TriangleRegister) {
+    pub fn clock_length(&mut self) {
         // Length counter only decrements if control flag is clear
-        if reg.counter & 0x80 == 0 && self.length_counter != 0 {
+        if self.counter & 0x80 == 0 && self.length_counter != 0 {
             self.length_counter -= 1;
         }
     }
@@ -83,6 +84,10 @@ impl TriangleChannel {
 
         // Output current position in triangle wave
         TRIANGLE_TABLE[self.sequence_idx as usize]
+    }
+
+    pub fn update_counter(&mut self, val: u8) {
+        self.counter = val;
     }
 }
 

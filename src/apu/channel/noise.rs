@@ -1,4 +1,4 @@
-use crate::apu::{registers::NoiseRegister, units::envelope::Envelope};
+use crate::apu::units::envelope::Envelope;
 
 use super::{LENGTH_TABLE, TimedChannel};
 
@@ -11,6 +11,10 @@ const NOISE_PERIOD_TABLE: [u16; 16] = [
 
 #[derive(Debug)]
 pub struct NoiseChannel {
+    loop_flag: bool,
+    const_volume: bool,
+    load_volume: u8,
+
     envelope: Envelope,
     timer_period: u16,
     timer_counter: u16,
@@ -23,6 +27,10 @@ pub struct NoiseChannel {
 impl NoiseChannel {
     pub fn new() -> Self {
         Self {
+            loop_flag: false,
+            const_volume: false,
+            load_volume: 0,
+
             envelope: Envelope::default(),
             timer_period: 0,
             timer_counter: 0,
@@ -59,12 +67,13 @@ impl NoiseChannel {
         self.shift_register |= feedback_bit << 14;
     }
 
-    pub fn clock_envelope(&mut self, reg: &NoiseRegister) {
-        self.envelope.clock(reg.envelope);
+    pub fn clock_envelope(&mut self) {
+        self.envelope
+            .clock(self.loop_flag, self.const_volume, self.load_volume);
     }
 
-    pub fn clock_length(&mut self, reg: &NoiseRegister) {
-        if reg.envelope & 0x20 == 0 && self.length_counter != 0 {
+    pub fn clock_length(&mut self) {
+        if !self.loop_flag && self.length_counter != 0 {
             self.length_counter -= 1;
         }
     }
@@ -82,6 +91,12 @@ impl NoiseChannel {
 
         // Otherwise output envelope volume
         self.envelope.output
+    }
+
+    pub fn update_volume(&mut self, val: u8) {
+        self.loop_flag = val & 0x20 != 0;
+        self.const_volume = val & 0x10 != 0;
+        self.load_volume = val & 0x0F;
     }
 }
 

@@ -1,7 +1,4 @@
-use crate::apu::{
-    registers::PulseRegister,
-    units::{envelope::Envelope, sweep::Sweep},
-};
+use crate::apu::units::{envelope::Envelope, sweep::Sweep};
 
 use super::{LENGTH_TABLE, TimedChannel};
 
@@ -15,13 +12,22 @@ const DUTY_TABLE: [[u8; 8]; 4] = [
 
 #[derive(Debug)]
 pub struct PulseChannel {
+    duty_mode: u8,
+    loop_flag: bool,
+    const_volume: bool,
+    load_volume: u8,
+
+    sweep_enabled: bool,
+    sweep_period: u8,
+    sweep_negate: bool,
+    sweep_shamt: u8,
+
     envelope: Envelope,
     sweep: Sweep,
     timer_period: u16,
     timer_counter: u16,
     pub length_enabled: bool, // Updated in the beginning of each APU tick with status register
     pub length_counter: u8,
-    duty_mode: u8,
     duty_idx: u8,
     muted: bool,
 }
@@ -29,13 +35,22 @@ pub struct PulseChannel {
 impl PulseChannel {
     pub fn new(is_pulse2: bool) -> Self {
         Self {
+            duty_mode: 0,
+            loop_flag: false,
+            const_volume: false,
+            load_volume: 0,
+
+            sweep_enabled: false,
+            sweep_period: 0,
+            sweep_negate: false,
+            sweep_shamt: 0,
+
             envelope: Envelope::default(),
             sweep: Sweep::new(is_pulse2),
             timer_period: 0,
             timer_counter: 0,
             length_enabled: true,
             length_counter: 0,
-            duty_mode: 0,
             duty_idx: 0,
             muted: false,
         }
@@ -50,16 +65,23 @@ impl PulseChannel {
             }
         }
     }
-    pub fn clock_envelope(&mut self, reg: &PulseRegister) {
-        self.envelope.clock(reg.envelope);
+    pub fn clock_envelope(&mut self) {
+        self.envelope
+            .clock(self.loop_flag, self.const_volume, self.load_volume);
     }
-    pub fn clock_length(&mut self, reg: &PulseRegister) {
-        if reg.envelope & 0x20 == 0 && self.length_counter != 0 {
+    pub fn clock_length(&mut self) {
+        if !self.loop_flag && self.length_counter != 0 {
             self.length_counter -= 1;
         }
     }
-    pub fn clock_sweep(&mut self, reg: &PulseRegister) {
-        let (timer, muted) = self.sweep.clock(reg.sweep, self.timer_period);
+    pub fn clock_sweep(&mut self) {
+        let (timer, muted) = self.sweep.clock(
+            self.sweep_enabled,
+            self.sweep_period,
+            self.sweep_negate,
+            self.sweep_shamt,
+            self.timer_period,
+        );
         self.timer_period = timer;
         self.muted = muted;
     }
@@ -75,8 +97,17 @@ impl PulseChannel {
             }
         }
     }
-    pub fn update_duty(&mut self, val: u8) {
+    pub fn update_volume(&mut self, val: u8) {
         self.duty_mode = (val & 0xC0) >> 6;
+        self.loop_flag = val & 0x20 != 0;
+        self.const_volume = val & 0x10 != 0;
+        self.load_volume = val & 0x0F;
+    }
+    pub fn update_sweep(&mut self, val: u8) {
+        self.sweep_enabled = val & 0x80 != 0;
+        self.sweep_period = (val & 0x70) >> 4;
+        self.sweep_negate = val & 0x08 != 0;
+        self.sweep_shamt = val & 0x07;
     }
 }
 

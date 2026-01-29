@@ -55,19 +55,3 @@ impl FrameCounter {
         self.contains(Self::FIVE_STEP_MODE)
     }
 }
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct PulseRegister {
-    pub envelope: u8,
-    pub sweep: u8,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TriangleRegister {
-    pub counter: u8,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoiseRegister {
-    pub envelope: u8,
-}

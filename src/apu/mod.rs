@@ -2,25 +2,22 @@ mod channel;
 pub mod registers;
 mod units;
 
+use std::{cell::RefCell, ops::DerefMut, rc::Rc};
+
 pub use channel::TimedChannel;
 
-use crate::apu::registers::TriangleRegister;
+use crate::cartridge::Rom;
 
 use self::{
-    channel::{noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
-    registers::{APUStatus, FrameCounter, NoiseRegister, PulseRegister},
+    channel::{dmc::DMCChannel, noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
+    registers::{APUStatus, FrameCounter},
 };
 
 const CPU_FREQ: f64 = 1_789_773.0;
 const SAMPLE_RATE: f64 = 44_100.0;
 const FRAME_COUNTER_RATE: usize = 3728;
 
-#[derive(Debug)]
 pub struct APU {
-    pub pulse1_reg: PulseRegister,
-    pub pulse2_reg: PulseRegister,
-    pub triag_reg: TriangleRegister,
-    pub noise_reg: NoiseRegister,
     pub status: APUStatus,
     pub frame_counter: FrameCounter,
     pub irq_sig: bool,
@@ -29,6 +26,7 @@ pub struct APU {
     pub pulse2: PulseChannel,
     pub triag: TriangleChannel,
     pub noise: NoiseChannel,
+    pub dmc: DMCChannel,
 
     cycles: usize,
     frame_cycle: usize,
@@ -36,15 +34,12 @@ pub struct APU {
 
     sample_accumulator: f64,
     pub sample_buffer: Vec<f32>,
+    rom: Rc<RefCell<Rom>>,
 }
 
-impl Default for APU {
-    fn default() -> Self {
+impl APU {
+    pub fn new(rom: Rc<RefCell<Rom>>) -> Self {
         Self {
-            pulse1_reg: PulseRegister::default(),
-            pulse2_reg: PulseRegister::default(),
-            triag_reg: TriangleRegister::default(),
-            noise_reg: NoiseRegister::default(),
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
             irq_sig: false,
@@ -53,26 +48,25 @@ impl Default for APU {
             pulse2: PulseChannel::new(true),
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
+            dmc: DMCChannel::default(),
 
             cycles: 0,
             cycle_accumulator: 0,
             frame_cycle: 0,
             sample_accumulator: 0.0,
             sample_buffer: Vec::with_capacity(4096),
+            rom,
         }
     }
-}
 
-impl APU {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn tick(&mut self, cycles: u16) {
+    pub fn tick(&mut self, cycles: u16) -> u16 {
         let cycles = cycles as usize;
         self.cycles += cycles;
 
         self.triag.clock_timer(cycles);
+        let stall = self
+            .dmc
+            .clock_timer(cycles, self.rom.borrow_mut().deref_mut());
         let total_cycles = self.cycle_accumulator + cycles;
         let apu_ticks = total_cycles / 2;
         self.cycle_accumulator = total_cycles % 2;
@@ -103,6 +97,7 @@ impl APU {
         }
 
         self.generate_samples(cycles);
+        stall
     }
 
     fn clock_frame_sequencer(&mut self, quarter_frame: usize) {
@@ -121,7 +116,7 @@ impl APU {
                 self.clock_envelopes();
                 self.clock_length_and_sweep();
 
-                self.irq_sig = self.frame_counter.emit_irq();
+                self.irq_sig = self.frame_counter.emit_irq() || self.dmc.irq_flag;
             }
             4 if self.frame_counter.is_five_mode() => {
                 self.clock_envelopes();
@@ -132,26 +127,26 @@ impl APU {
     }
 
     fn clock_envelopes(&mut self) {
-        self.pulse1.clock_envelope(&self.pulse1_reg);
-        self.pulse2.clock_envelope(&self.pulse2_reg);
-        self.triag.clock_linear_counter(&self.triag_reg);
-        self.noise.clock_envelope(&self.noise_reg);
+        self.pulse1.clock_envelope();
+        self.pulse2.clock_envelope();
+        self.triag.clock_linear_counter();
+        self.noise.clock_envelope();
     }
 
     fn clock_length_and_sweep(&mut self) {
         if self.status.contains(APUStatus::PULSE_CHANNEL1) {
-            self.pulse1.clock_length(&self.pulse1_reg);
-            self.pulse1.clock_sweep(&self.pulse1_reg);
+            self.pulse1.clock_length();
+            self.pulse1.clock_sweep();
         }
         if self.status.contains(APUStatus::PULSE_CHANNEL2) {
-            self.pulse2.clock_length(&self.pulse2_reg);
-            self.pulse2.clock_sweep(&self.pulse2_reg);
+            self.pulse2.clock_length();
+            self.pulse2.clock_sweep();
         }
         if self.status.contains(APUStatus::NOISE_CHANNEL) {
-            self.noise.clock_length(&self.noise_reg);
+            self.noise.clock_length();
         }
         if self.status.contains(APUStatus::TRIAG_CHANNEL) {
-            self.triag.clock_length(&self.triag_reg);
+            self.triag.clock_length();
         }
     }
 
@@ -188,6 +183,7 @@ impl APU {
             res |= 0x80;
         }
         self.status.remove(APUStatus::FRAME_INTERRUPT);
+        self.status.remove(APUStatus::DMC_INTERRUPT);
         self.irq_sig = false;
         res
     }
@@ -240,8 +236,8 @@ impl APU {
         let pulse2_out = self.pulse2.output();
         let triangle_out = self.triag.output();
         let noise_out = self.noise.output();
+        let dmc_out = self.dmc.output();
 
-        // Non-linear mixing (TODO: use lookup tables)
         let square_sum = pulse1_out + pulse2_out;
         let square_out = if square_sum == 0 {
             0.0
@@ -249,7 +245,9 @@ impl APU {
             95.88 / (8128.0 / square_sum as f32 + 100.0)
         };
 
-        let tnd_sum = 3.0 * triangle_out as f32 / 8227.0 + 2.0 * noise_out as f32 / 12241.0;
+        let tnd_sum = 3.0 * triangle_out as f32 / 8227.0
+            + 2.0 * noise_out as f32 / 12241.0
+            + dmc_out as f32 / 22638.0;
         let tnd_out = if tnd_sum == 0.0 {
             0.0
         } else {

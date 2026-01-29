@@ -61,11 +61,12 @@ impl<'call> Bus<'call> {
     {
         let rom = Rc::new(RefCell::new(rom));
         let ppu = PPU::new(Rc::clone(&rom));
+        let apu = APU::new(Rc::clone(&rom));
         Self {
             vram: [0u8; 0x800],
             rom,
             ppu,
-            apu: APU::default(),
+            apu,
 
             joypad1: Joypad::new(),
             joypad2: Joypad::new(),
@@ -77,10 +78,11 @@ impl<'call> Bus<'call> {
     pub fn tick(&mut self, cycles: u16) -> bool {
         self.cycles += cycles as usize;
 
-        self.apu.tick(cycles);
+        let stall = self.apu.tick(cycles);
+        self.cycles += stall as usize;
 
         let nmi_before = self.ppu.nmi_interrupt.is_some();
-        self.ppu.tick(cycles * 3);
+        self.ppu.tick((cycles + stall) * 3);
         let nmi_after = self.ppu.nmi_interrupt.is_some();
 
         if !nmi_before && nmi_after {
@@ -175,17 +177,11 @@ impl<'call> Mem for Bus<'call> {
                 self.write_u8(mirror_down_addr, data);
             }
 
-            0x4000 => {
-                self.apu.pulse1_reg.envelope = data;
-                self.apu.pulse1.update_duty(data);
-            }
-            0x4004 => {
-                self.apu.pulse2_reg.envelope = data;
-                self.apu.pulse2.update_duty(data);
-            }
+            0x4000 => self.apu.pulse1.update_volume(data),
+            0x4004 => self.apu.pulse2.update_volume(data),
 
-            0x4001 => self.apu.pulse1_reg.sweep = data,
-            0x4005 => self.apu.pulse2_reg.sweep = data,
+            0x4001 => self.apu.pulse1.update_sweep(data),
+            0x4005 => self.apu.pulse2.update_sweep(data),
 
             0x4002 => self.apu.pulse1.update_period_lo(data),
             0x4006 => self.apu.pulse2.update_period_lo(data),
@@ -193,15 +189,18 @@ impl<'call> Mem for Bus<'call> {
             0x4003 => self.apu.pulse1.update_period_hi(data),
             0x4007 => self.apu.pulse2.update_period_hi(data),
 
-            0x4008 => self.apu.triag_reg.counter = data,
+            0x4008 => self.apu.triag.update_counter(data),
             0x400A => self.apu.triag.update_period_lo(data),
             0x400B => self.apu.triag.update_period_hi(data),
 
-            0x400C => self.apu.noise_reg.envelope = data,
+            0x400C => self.apu.noise.update_volume(data),
             0x400E => self.apu.noise.update_period_lo(data),
             0x400F => self.apu.noise.update_period_hi(data),
 
-            0x4000..=0x4013 => {}
+            0x4010 => self.apu.dmc.write_flags(data),
+            0x4011 => self.apu.dmc.write_output_level(data),
+            0x4012 => self.apu.dmc.write_sample_address(data),
+            0x4013 => self.apu.dmc.write_sample_length(data),
 
             // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
             0x4014 => {

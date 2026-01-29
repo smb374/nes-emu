@@ -15,11 +15,14 @@ impl Sweep {
     }
 
     // Reg: EPPP.NSSS, -> (new period, muted)
-    pub fn clock(&mut self, reg_val: u8, timer: u16) -> (u16, bool) {
-        let shamt = reg_val & 0x07;
-        let negate = reg_val & 0x08 != 0;
-        let enabled = reg_val & 0x80 != 0;
-
+    pub fn clock(
+        &mut self,
+        enabled: bool,
+        period: u8,
+        negate: bool,
+        shamt: u8,
+        timer: u16,
+    ) -> (u16, bool) {
         let delta = timer >> shamt;
         let target = if negate {
             let neg_delta = (!delta).wrapping_add(if self.use_2c { 1 } else { 0 });
@@ -37,7 +40,7 @@ impl Sweep {
         };
 
         if self.divide == 0 || self.reload {
-            self.divide = (reg_val & 0x70) >> 4;
+            self.divide = period;
             self.reload = false;
         } else {
             self.divide -= 1;
