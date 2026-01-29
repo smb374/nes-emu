@@ -242,13 +242,8 @@ impl PPU {
                     self.internal.copy_horizontal();
                 }
 
-                // Notify mapper of PPU address changes (for MMC3 scanline counter)
-                // MMC3 counts A12 transitions during tile fetching
-                // Simulate 42 tile fetches per scanline (32 background + ~10 sprite evaluations)
-                for _ in 0..42 {
-                    self.rom.borrow_mut().ppu_tick(0x0000);  // A12=0 (pattern table $0xxx)
-                    self.rom.borrow_mut().ppu_tick(0x1000);  // A12=1 (pattern table $1xxx)
-                }
+                self.rom.borrow_mut().ppu_tick(0x0000); // A12=0 (pattern table $0xxx)
+                self.rom.borrow_mut().ppu_tick(0x1000); // A12=1 (pattern table $1xxx)
 
                 // Render the completed scanline
                 self.render_scanline();
