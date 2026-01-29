@@ -20,7 +20,7 @@ pub struct PulseChannel {
     timer_period: u16,
     timer_counter: u16,
     pub length_enabled: bool, // Updated in the beginning of each APU tick with status register
-    length_counter: u8,
+    pub length_counter: u8,
     duty_mode: u8,
     duty_idx: u8,
     muted: bool,

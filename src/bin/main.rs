@@ -54,7 +54,7 @@ fn main() {
     audio_device.resume();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("smb.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("zelda.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
     let mut next_frame_target = Instant::now();

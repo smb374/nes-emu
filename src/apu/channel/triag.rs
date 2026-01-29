@@ -15,7 +15,7 @@ pub struct TriangleChannel {
     timer_period: u16,
     timer_counter: u16,
     pub length_enabled: bool,
-    length_counter: u8,
+    pub length_counter: u8,
     linear_counter: u8,
     linear_counter_reload_flag: bool,
     sequence_idx: u8, // 0-31, position in triangle wave

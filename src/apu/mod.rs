@@ -72,12 +72,6 @@ impl APU {
         let cycles = cycles as usize;
         self.cycles += cycles;
 
-        // Update length_enabled for each channel here.
-        self.pulse1.length_enabled = self.status.contains(APUStatus::PULSE_CHANNEL1);
-        self.pulse2.length_enabled = self.status.contains(APUStatus::PULSE_CHANNEL2);
-        self.triag.length_enabled = self.status.contains(APUStatus::TRIAG_CHANNEL);
-        self.noise.length_enabled = self.status.contains(APUStatus::NOISE_CHANNEL);
-
         self.triag.clock_timer(cycles);
         let total_cycles = self.cycle_accumulator + cycles;
         let apu_ticks = total_cycles / 2;
@@ -174,10 +168,51 @@ impl APU {
     }
 
     pub fn read_status(&mut self) -> u8 {
-        let status = self.status.bits();
-        // Reading $4015 clears the frame IRQ flag
+        let mut res = 0u8;
+        if self.pulse1.length_counter > 0 {
+            res |= 0x01;
+        }
+        if self.pulse2.length_counter > 0 {
+            res |= 0x02;
+        }
+        if self.triag.length_counter > 0 {
+            res |= 0x04;
+        }
+        if self.noise.length_counter > 0 {
+            res |= 0x08;
+        }
+        // Bit 4 for DMC would go here once implemented
         self.irq_sig = false;
-        status
+        res
+    }
+
+    pub fn write_status(&mut self, val: u8) {
+        self.status.update(val);
+        // If bit is 0, length counter must be cleared immediately
+        if !self.status.contains(APUStatus::PULSE_CHANNEL1) {
+            self.pulse1.length_counter = 0;
+            self.pulse1.length_enabled = false;
+        } else {
+            self.pulse1.length_enabled = true;
+        }
+        if !self.status.contains(APUStatus::PULSE_CHANNEL2) {
+            self.pulse2.length_counter = 0;
+            self.pulse2.length_enabled = false;
+        } else {
+            self.pulse2.length_enabled = true;
+        }
+        if !self.status.contains(APUStatus::TRIAG_CHANNEL) {
+            self.triag.length_counter = 0;
+            self.triag.length_enabled = false;
+        } else {
+            self.triag.length_enabled = true;
+        }
+        if !self.status.contains(APUStatus::NOISE_CHANNEL) {
+            self.noise.length_counter = 0;
+            self.noise.length_enabled = false;
+        } else {
+            self.noise.length_enabled = true;
+        }
     }
 
     pub fn write_frame_counter(&mut self, value: u8) {

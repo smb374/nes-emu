@@ -15,7 +15,7 @@ pub struct NoiseChannel {
     timer_period: u16,
     timer_counter: u16,
     pub length_enabled: bool,
-    length_counter: u8,
+    pub length_counter: u8,
     shift_register: u16, // 15-bit LFSR
     mode: bool,          // false = mode 0 (normal), true = mode 1 (short/metallic)
 }

@@ -123,7 +123,7 @@ impl<'call> Mem for Bus<'call> {
             0x4015 => self.apu.read_status(),
 
             0x4016 => self.joypad1.read(),
-            0x4017 => 0x40,  // $4017 is write-only, return open bus
+            0x4017 => 0x40, // $4017 is write-only, return open bus
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x2007;
@@ -214,7 +214,7 @@ impl<'call> Mem for Bus<'call> {
                 self.ppu.write_oam_dma(&buffer);
             }
 
-            0x4015 => self.apu.status.update(data),
+            0x4015 => self.apu.write_status(data),
 
             0x4016 => self.joypad1.write(data),
 

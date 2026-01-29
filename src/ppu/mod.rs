@@ -134,7 +134,7 @@ impl PPU {
 
         // Render sprites
         if self.mask.show_sprites() && self.scanline < 240 {
-            let sprite_size = self.ctrl.sprite_size();
+            let sprite_size = self.ctrl.sprite_size(); // Usually returns 8 or 16
 
             for sprite_idx in (0..64).rev() {
                 let oam_offset = sprite_idx * 4;
@@ -158,8 +158,19 @@ impl PPU {
                     y_offset = sprite_size as u16 - 1 - y_offset;
                 }
 
-                let bank = self.ctrl.sprt_pattern_addr();
-                let tile_addr = bank + (tile_num as u16) * 16 + y_offset;
+                // Handle 8x16 sprites correctly
+                let tile_addr = if sprite_size == 16 {
+                    // Bit 0 selects the pattern table bank ($0000 or $1000)
+                    let bank = (tile_num as u16 & 0x01) * 0x1000;
+                    // Bits 7-1 are the tile index; top half is tile, bottom half is tile + 1
+                    let tile_index = (tile_num & 0xFE) as u16 + (y_offset / 8);
+                    bank + (tile_index * 16) + (y_offset % 8)
+                } else {
+                    // Standard 8x8 behavior
+                    let bank = self.ctrl.sprt_pattern_addr();
+                    bank + (tile_num as u16 * 16) + y_offset
+                };
+
                 let tile_low = self.rom.borrow().read_chr(tile_addr);
                 let tile_high = self.rom.borrow().read_chr(tile_addr + 8);
 
