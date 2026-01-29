@@ -97,6 +97,12 @@ impl APU {
         }
 
         self.generate_samples(cycles);
+
+        // Check for DMC IRQ (can happen at any time)
+        if self.dmc.irq_flag {
+            self.irq_sig = true;
+        }
+
         stall
     }
 
@@ -116,7 +122,7 @@ impl APU {
                 self.clock_envelopes();
                 self.clock_length_and_sweep();
 
-                self.irq_sig = self.frame_counter.emit_irq() || self.dmc.irq_flag;
+                self.irq_sig = self.frame_counter.emit_irq();
             }
             4 if self.frame_counter.is_five_mode() => {
                 self.clock_envelopes();
@@ -176,6 +182,9 @@ impl APU {
         if self.noise.length_counter > 0 {
             res |= 0x08;
         }
+        if self.dmc.bytes_remaining() > 0 {
+            res |= 0x10;
+        }
         if self.status.contains(APUStatus::FRAME_INTERRUPT) {
             res |= 0x40;
         }
@@ -184,6 +193,7 @@ impl APU {
         }
         self.status.remove(APUStatus::FRAME_INTERRUPT);
         self.status.remove(APUStatus::DMC_INTERRUPT);
+        self.dmc.irq_flag = false; // Clear DMC IRQ flag on read
         self.irq_sig = false;
         res
     }
@@ -214,6 +224,13 @@ impl APU {
             self.noise.length_enabled = false;
         } else {
             self.noise.length_enabled = true;
+        }
+
+        // DMC control
+        if self.status.contains(APUStatus::DMC_CHANNEL) {
+            self.dmc.start_playback();
+        } else {
+            self.dmc.stop_playback();
         }
     }
 
