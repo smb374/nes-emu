@@ -105,26 +105,6 @@ impl<'call> Mem for Bus<'call> {
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(),
 
-            0x4000 => self.apu.pulse1_reg.ctrl,
-            0x4004 => self.apu.pulse2_reg.ctrl,
-
-            0x4001 => self.apu.pulse1_reg.sweep,
-            0x4005 => self.apu.pulse2_reg.sweep,
-
-            0x4002 => self.apu.pulse1_reg.tl,
-            0x4006 => self.apu.pulse2_reg.tl,
-
-            0x4003 => self.apu.pulse1_reg.th,
-            0x4007 => self.apu.pulse2_reg.th,
-
-            0x4008 => self.apu.triag_reg.ctrl,
-            0x400A => self.apu.triag_reg.tl,
-            0x400B => self.apu.triag_reg.th,
-
-            0x400C => self.apu.noise_reg.ctrl,
-            0x400E => self.apu.noise_reg.noise,
-            0x400F => self.apu.noise_reg.lcload,
-
             0x4000..=0x4014 => {
                 // Open Bus
                 0
