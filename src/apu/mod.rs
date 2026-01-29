@@ -32,6 +32,7 @@ pub struct APU {
 
     cycles: usize,
     frame_cycle: usize,
+    cycle_accumulator: usize,
 
     sample_accumulator: f64,
     pub sample_buffer: Vec<f32>,
@@ -54,6 +55,7 @@ impl Default for APU {
             noise: NoiseChannel::new(),
 
             cycles: 0,
+            cycle_accumulator: 0,
             frame_cycle: 0,
             sample_accumulator: 0.0,
             sample_buffer: Vec::with_capacity(4096),
@@ -76,29 +78,35 @@ impl APU {
         self.triag.length_enabled = self.status.contains(APUStatus::TRIAG_CHANNEL);
         self.noise.length_enabled = self.status.contains(APUStatus::NOISE_CHANNEL);
 
-        let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
-        self.frame_cycle += cycles;
-
-        let frame_length = if self.frame_counter.is_five_mode() {
-            FRAME_COUNTER_RATE * 5
-        } else {
-            FRAME_COUNTER_RATE * 4
-        };
-
-        if self.frame_cycle >= frame_length {
-            self.frame_cycle %= frame_length;
-        }
-
-        let new_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
-
-        if old_quarter_frame != new_quarter_frame {
-            self.clock_frame_sequencer(new_quarter_frame);
-        }
-
-        self.pulse1.clock_timer(cycles);
-        self.pulse2.clock_timer(cycles);
         self.triag.clock_timer(cycles);
-        self.noise.clock_timer(cycles);
+        let total_cycles = self.cycle_accumulator + cycles;
+        let apu_ticks = total_cycles / 2;
+        self.cycle_accumulator = total_cycles % 2;
+
+        if apu_ticks > 0 {
+            self.pulse1.clock_timer(apu_ticks);
+            self.pulse2.clock_timer(apu_ticks);
+            self.noise.clock_timer(apu_ticks);
+
+            let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
+            self.frame_cycle += apu_ticks;
+
+            let frame_length = if self.frame_counter.is_five_mode() {
+                FRAME_COUNTER_RATE * 5
+            } else {
+                FRAME_COUNTER_RATE * 4
+            };
+
+            if self.frame_cycle >= frame_length {
+                self.frame_cycle %= frame_length;
+            }
+
+            let new_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
+
+            if old_quarter_frame != new_quarter_frame {
+                self.clock_frame_sequencer(new_quarter_frame);
+            }
+        }
 
         self.generate_samples(cycles);
     }
