@@ -128,8 +128,8 @@ pub fn trace(cpu: &mut CPU) -> String {
         .to_string();
 
     format!(
-        "{:47} A:{:02x} X:{:02x} Y:{:02x} P:{:02x} SP:{:02x}",
-        asm_str, cpu.reg_a, cpu.reg_x, cpu.reg_y, cpu.status, cpu.sp,
+        "{:47} A:{:02x} X:{:02x} Y:{:02x} P:{:02x} SP:{:02x} CYC:{}",
+        asm_str, cpu.reg_a, cpu.reg_x, cpu.reg_y, cpu.status, cpu.sp, cpu.cycles
     )
     .to_ascii_uppercase()
 }

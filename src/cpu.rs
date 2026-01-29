@@ -50,6 +50,7 @@ pub struct CPU<'a> {
     pub status: CpuFlags,
     bus: Bus<'a>,
     irq_sig: bool,
+    pub cycles: usize,
 }
 
 impl<'a> Mem for CPU<'a> {
@@ -72,6 +73,7 @@ impl<'a> CPU<'a> {
             status: CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE,
             bus,
             irq_sig: false,
+            cycles: 0,
         }
     }
 
@@ -81,20 +83,13 @@ impl<'a> CPU<'a> {
         self.reg_y = 0;
         self.sp = STACK_RESET;
         self.status = CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE;
+        self.cycles = 0;
 
         self.pc = self.read_u16(0xFFFC);
     }
 
     pub fn run(&mut self) {
         self.run_with_cb(|_| {});
-    }
-
-    pub fn print_stack(&mut self) {
-        let start = STACK_BASE + self.sp as u16;
-        let end = STACK_BASE + STACK_RESET as u16;
-        for i in start..end {
-            println!("stack[{:#x}] = 0x{:02x}", i + 1, self.bus.read_u8(i + 1));
-        }
     }
 
     pub fn run_with_cb<F>(&mut self, mut cb: F)
@@ -114,6 +109,7 @@ impl<'a> CPU<'a> {
             let pc_cache = self.pc;
             if let Some(op) = OPS[opcode as usize] {
                 self.run_op(op);
+                self.cycles += op.cycles as usize;
                 self.irq_sig = self.irq_sig || self.bus.tick(op.cycles);
                 if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
@@ -148,7 +144,6 @@ impl<'a> CPU<'a> {
 
         self.bus.tick(2);
         self.pc = self.read_u16(0xFFFE);
-        eprintln!("Goto ($FFFE) = {:04X}", self.pc);
     }
 
     fn push_stack_u16(&mut self, val: u16) {

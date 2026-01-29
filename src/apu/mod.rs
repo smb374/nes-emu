@@ -181,7 +181,13 @@ impl APU {
         if self.noise.length_counter > 0 {
             res |= 0x08;
         }
-        // Bit 4 for DMC would go here once implemented
+        if self.status.contains(APUStatus::FRAME_INTERRUPT) {
+            res |= 0x40;
+        }
+        if self.status.contains(APUStatus::DMC_INTERRUPT) {
+            res |= 0x80;
+        }
+        self.status.remove(APUStatus::FRAME_INTERRUPT);
         self.irq_sig = false;
         res
     }
@@ -217,8 +223,10 @@ impl APU {
 
     pub fn write_frame_counter(&mut self, value: u8) {
         self.frame_counter.update(value);
-        // Writing to $4017 clears the frame IRQ flag
-        self.irq_sig = false;
+        if value & 0x40 != 0 {
+            self.status.remove(APUStatus::FRAME_INTERRUPT);
+            self.irq_sig = false;
+        }
 
         // If 5-step mode is set, immediately clock all units
         if self.frame_counter.is_five_mode() {
