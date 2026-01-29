@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{Mem, cartridge::Rom, joypad::Joypad, ppu::PPU};
+use crate::{Mem, apu::APU, cartridge::Rom, joypad::Joypad, ppu::PPU};
 
 //  _______________ $10000  _______________
 // | PRG-ROM       |       |               |
@@ -40,6 +40,7 @@ pub struct Bus<'call> {
     vram: [u8; 0x800],
     rom: Rc<RefCell<Rom>>,
     ppu: PPU,
+    apu: APU,
 
     cycles: usize,
     joypad1: Joypad,
@@ -58,6 +59,7 @@ impl<'call> Bus<'call> {
             vram: [0u8; 0x800],
             rom,
             ppu,
+            apu: APU::default(),
 
             joypad1: Joypad::new(),
             joypad2: Joypad::new(),
@@ -103,19 +105,41 @@ impl<'call> Mem for Bus<'call> {
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(),
 
-            0x4000..=0x4015 => {
-                // ignore APU
+            0x4000 => self.apu.pulse1_reg.ctrl,
+            0x4004 => self.apu.pulse2_reg.ctrl,
+
+            0x4001 => self.apu.pulse1_reg.sweep,
+            0x4005 => self.apu.pulse2_reg.sweep,
+
+            0x4002 => self.apu.pulse1_reg.tl,
+            0x4006 => self.apu.pulse2_reg.tl,
+
+            0x4003 => self.apu.pulse1_reg.th,
+            0x4007 => self.apu.pulse2_reg.th,
+
+            0x4008 => self.apu.triag_reg.ctrl,
+            0x400A => self.apu.triag_reg.tl,
+            0x400B => self.apu.triag_reg.th,
+
+            0x400C => self.apu.noise_reg.ctrl,
+            0x400E => self.apu.noise_reg.noise,
+            0x400F => self.apu.noise_reg.lcload,
+
+            0x4000..=0x4014 => {
+                // Open Bus
                 0
             }
 
+            0x4015 => self.apu.status.bits(),
+
             0x4016 => self.joypad1.read(),
-            0x4017 => 0x40,
+            0x4017 => self.apu.frame_counter.bits(),
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x2007;
                 self.read_u8(mirror_down_addr)
             }
-            0x8000..=0xFFFF => self.rom.borrow_mut().read_prg(addr),
+            0x6000..=0xFFFF => self.rom.borrow_mut().read_prg(addr),
 
             _ => {
                 // eprintln!("Ignoring mem access at {}", addr);
@@ -156,13 +180,32 @@ impl<'call> Mem for Bus<'call> {
                 self.ppu.write_data(data);
             }
 
-            0x4000..=0x4013 | 0x4015 => {
-                //ignore APU
+            0x2008..=PPU_REGISTERS_MIRRORS_END => {
+                let mirror_down_addr = addr & 0x2007;
+                self.write_u8(mirror_down_addr, data);
             }
 
-            0x4016 => self.joypad1.write(data),
+            0x4000 => self.apu.pulse1_reg.ctrl = data,
+            0x4004 => self.apu.pulse2_reg.ctrl = data,
 
-            0x4017 => self.joypad2.write(data),
+            0x4001 => self.apu.pulse1_reg.sweep = data,
+            0x4005 => self.apu.pulse2_reg.sweep = data,
+
+            0x4002 => self.apu.pulse1_reg.tl = data,
+            0x4006 => self.apu.pulse2_reg.tl = data,
+
+            0x4003 => self.apu.pulse1_reg.th = data,
+            0x4007 => self.apu.pulse2_reg.th = data,
+
+            0x4008 => self.apu.triag_reg.ctrl = data,
+            0x400A => self.apu.triag_reg.tl = data,
+            0x400B => self.apu.triag_reg.th = data,
+
+            0x400C => self.apu.noise_reg.ctrl = data,
+            0x400E => self.apu.noise_reg.noise = data,
+            0x400F => self.apu.noise_reg.lcload = data,
+
+            0x4000..=0x4013 => {}
 
             // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
             0x4014 => {
@@ -173,17 +216,15 @@ impl<'call> Mem for Bus<'call> {
                 }
 
                 self.ppu.write_oam_dma(&buffer);
-
-                // todo: handle this eventually
-                let add_cycles: u16 = if self.cycles % 2 == 1 { 514 } else { 513 };
-                self.tick(add_cycles); //todo this will cause weird effects as PPU will have 513/514 * 3 ticks
             }
 
-            0x2008..=PPU_REGISTERS_MIRRORS_END => {
-                let mirror_down_addr = addr & 0x2007;
-                self.write_u8(mirror_down_addr, data);
-            }
-            0x8000..=0xFFFF => self.rom.borrow_mut().write_prg(addr, data),
+            0x4015 => self.apu.status.update(data),
+
+            0x4016 => self.joypad1.write(data),
+
+            0x4017 => self.apu.frame_counter.update(data),
+
+            0x6000..=0xFFFF => self.rom.borrow_mut().write_prg(addr, data),
 
             _ => {
                 // eprintln!("Ignoring mem write-access at {}", addr);
