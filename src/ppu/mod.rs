@@ -224,7 +224,7 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) -> bool {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) -> bool {
         self.cycles += cycles as usize;
         // Check if we've completed a scanline
         if self.cycles >= 341 {
@@ -239,11 +239,6 @@ impl PPU {
                     self.internal.increment_y();
                     // Copy horizontal scroll from t to v
                     self.internal.copy_horizontal();
-                    let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
-                    let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
-
-                    rom.ppu_tick(bg_table);
-                    rom.ppu_tick(spr_table);
                 }
                 // Render the completed scanline
                 self.render_scanline(rom);
@@ -257,12 +252,6 @@ impl PPU {
                     }
                     // Copy vertical scroll from t to v
                     self.internal.copy_vertical();
-
-                    let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
-                    let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
-
-                    rom.ppu_tick(bg_table);
-                    rom.ppu_tick(spr_table);
                 }
                 // Clear VBlank and sprite 0 hit flags
                 self.status.remove(StatusRegister::VBLANK_STARTED);
@@ -281,10 +270,15 @@ impl PPU {
             if self.scanline >= 262 {
                 self.scanline = 0;
                 self.nmi_interrupt = None;
-                return true;
             }
+            // self.ctrl.bknd_pattern_addr() == 0 && self.ctrl.sprt_pattern_addr() == 0x1000
+            true
+        } else {
+            // self.cycles >= 324
+            //     && self.ctrl.bknd_pattern_addr() == 0x1000
+            //     && self.ctrl.sprt_pattern_addr() == 0
+            false
         }
-        false
     }
 
     pub fn poll_nmi_interrupt(&mut self) -> Option<u8> {
@@ -336,8 +330,14 @@ impl PPU {
         self.internal.write_scroll(value); // Use new register system
     }
 
-    pub fn write_to_ppu_addr(&mut self, value: u8) {
+    pub fn write_to_ppu_addr(&mut self, rom: &mut Rom, value: u8) {
         self.internal.write_addr(value); // Use new register system
+        // After writing to PPUADDR, notify mapper of the new address
+        // This allows MMC3 to clock IRQ counter via $2006 writes
+        let addr = self.internal.get_v();
+        if addr <= 0x1FFF {
+            rom.ppu_tick(addr);
+        }
     }
 
     pub fn read_data(&mut self, rom: &mut Rom) -> u8 {
@@ -379,7 +379,7 @@ impl PPU {
 
         match addr {
             0x0000..=0x1FFF => {
-                // CHR ROM/RAM
+                rom.ppu_tick(addr);
                 rom.read_chr(addr)
             }
             0x2000..=0x2FFF => {
@@ -416,7 +416,6 @@ impl PPU {
 
         match addr {
             0x0000..=0x1FFF => {
-                // CHR ROM/RAM
                 rom.write_chr(addr, val);
             }
             0x2000..=0x2FFF => {

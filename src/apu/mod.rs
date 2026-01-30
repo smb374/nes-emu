@@ -55,7 +55,7 @@ impl APU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) {
         let cycles = cycles as usize;
         self.cycles += cycles;
 

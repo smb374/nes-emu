@@ -72,7 +72,7 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self, cycles: u16) -> bool {
+    pub fn tick(&mut self, cycles: u8) -> bool {
         self.cycles += cycles as usize;
 
         self.apu.tick(&mut self.rom, cycles);
@@ -160,7 +160,7 @@ impl<'call> Mem for Bus<'call> {
             }
 
             0x2006 => {
-                self.ppu.write_to_ppu_addr(data);
+                self.ppu.write_to_ppu_addr(&mut self.rom, data);
             }
             0x2007 => {
                 self.ppu.write_data(&mut self.rom, data);

@@ -206,21 +206,55 @@ impl Rom {
     pub fn ppu_tick(&mut self, ppu_addr: u16) {
         if let MapperType::MMC3(ref mut state) = self.mapper {
             let a12 = (ppu_addr & 0x1000) != 0;
+            let mut should_clock = false;
 
-            if a12 && !state.last_a12 {
+            // MMC3 A12 filtering implementation
+            // The hardware filters A12 by requiring it to stay low for 3 falling edges of M2
+            // before recognizing a rising edge. This prevents glitches from triggering IRQs.
+            //
+            // Since PPU ticks happen 3 times per CPU cycle (M2), we need to track:
+            // 1. When A12 falls, start counting M2 edges
+            // 2. Only trigger on A12 rise if we've seen at least 3 M2 cycles low
+
+            if a12 != state.a12_state {
+                if !a12 {
+                    // A12 falling edge - start the filter period
+                    state.m2_falling_count = 0;
+                    state.filtered_a12 = false;
+                } else {
+                    // A12 rising edge - check if enough time has passed
+                    // Require at least 9 PPU ticks (3 M2 cycles) with A12 low
+                    if state.m2_falling_count >= 9 {
+                        should_clock = true;
+                        state.filtered_a12 = true;
+                    }
+                }
+                state.a12_state = a12;
+            } else if !a12 && state.m2_falling_count < 255 {
+                // A12 is staying low - count PPU ticks (proxy for M2 edges)
+                state.m2_falling_count += 1;
+            }
+
+            // Clock the IRQ counter if we got a filtered rising edge
+            if should_clock {
+                // When the IRQ is clocked, check counter value
                 if state.irq_counter == 0 || state.irq_reload {
+                    // Reload with latch value
                     state.irq_counter = state.irq_latch;
                     state.irq_reload = false;
                 } else {
+                    // Decrement counter
                     state.irq_counter -= 1;
                 }
 
+                // Check if we should trigger IRQ
+                // Sharp MMC3 (most common): Triggers when counter == 0
+                // NEC MMC3 (alternate): Triggers on transition 1→0
+                // We implement Sharp behavior (more common and what most games expect)
                 if state.irq_counter == 0 && state.irq_enabled {
                     self.irq_sig = true;
                 }
             }
-
-            state.last_a12 = a12;
         }
     }
 

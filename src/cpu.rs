@@ -99,8 +99,10 @@ impl<'a> CPU<'a> {
         loop {
             if let Some(_nmi) = self.bus.poll_nmi_status() {
                 self.interrupt_nmi();
+                continue;
             } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {
                 self.interrupt_irq();
+                continue;
             }
             self.irq_sig = false;
             cb(self);
@@ -129,9 +131,8 @@ impl<'a> CPU<'a> {
         self.push_stack(flag.bits());
         self.status.insert(CpuFlags::INTR_DISABLE);
 
-        self.bus.tick(2);
         self.pc = self.read_u16(0xFFFA);
-        self.bus.tick(5);
+        self.irq_sig = self.irq_sig || self.bus.tick(7);
     }
 
     fn interrupt_irq(&mut self) {
@@ -143,9 +144,8 @@ impl<'a> CPU<'a> {
         self.push_stack(flag.bits());
         self.status.insert(CpuFlags::INTR_DISABLE);
 
-        self.bus.tick(2);
         self.pc = self.read_u16(0xFFFE);
-        self.bus.tick(5);
+        self.irq_sig = self.irq_sig || self.bus.tick(7);
     }
 
     fn push_stack_u16(&mut self, val: u16) {
