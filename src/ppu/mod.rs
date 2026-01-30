@@ -267,14 +267,12 @@ impl PPU {
                     // Copy vertical scroll from t to v
                     self.internal.copy_vertical();
 
-                    if self.mask.show_background() || self.mask.show_sprites() {
-                        let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
-                        let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
+                    let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
+                    let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
-                        if bg_table != spr_table {
-                            self.rom.borrow_mut().ppu_tick(0x0000); // Simulate BG fetch (Low)
-                            self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
-                        }
+                    if bg_table != spr_table {
+                        self.rom.borrow_mut().ppu_tick(0x0000); // Simulate BG fetch (Low)
+                        self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
                     }
                 }
                 // Clear VBlank and sprite 0 hit flags
