@@ -116,11 +116,6 @@ pub struct MMC3State {
     pub irq_reload: bool,
     pub irq_enabled: bool,
 
-    // A12 filtering state
-    pub a12_state: bool,
-    pub filtered_a12: bool,
-    pub m2_falling_count: u8,
-
     // Other
     pub arr_select: bool,
     pub prg_ram_enable: bool,
@@ -144,9 +139,6 @@ impl MMC3State {
             irq_counter: 0,
             irq_reload: false,
             irq_enabled: false,
-            a12_state: false,
-            filtered_a12: false,
-            m2_falling_count: 0,
             arr_select: false,
             prg_ram_enable: true,
             prg_banks: prg_pages * 2,

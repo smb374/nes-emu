@@ -44,7 +44,7 @@ fn main() {
     let desired_spec = AudioSpecDesired {
         freq: Some(44100),
         channels: Some(1),
-        samples: Some(512),
+        samples: Some(1024),
     };
     let audio_device: AudioQueue<f32> = sdl_context
         .audio()

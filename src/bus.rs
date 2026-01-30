@@ -191,10 +191,10 @@ impl<'call> Mem for Bus<'call> {
             0x400E => self.apu.noise.update_period_lo(data),
             0x400F => self.apu.noise.update_period_hi(data),
 
-            0x4010 => self.apu.dmc.write_flags(data),
-            0x4011 => self.apu.dmc.write_output_level(data),
-            0x4012 => self.apu.dmc.write_sample_address(data),
-            0x4013 => self.apu.dmc.write_sample_length(data),
+            0x4010 => self.apu.dmc.update_control(data),
+            0x4011 => self.apu.dmc.update_direct_load(data),
+            0x4012 => self.apu.dmc.update_sample_address(data),
+            0x4013 => self.apu.dmc.update_sample_length(data),
 
             // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
             0x4014 => {

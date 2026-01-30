@@ -4,7 +4,7 @@ mod units;
 
 pub use channel::TimedChannel;
 
-use crate::cartridge::Rom;
+use crate::{apu::units::filter::Filter, cartridge::Rom};
 
 use self::{
     channel::{dmc::DMCChannel, noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
@@ -32,6 +32,9 @@ pub struct APU {
 
     sample_accumulator: f64,
     pub sample_buffer: Vec<f32>,
+    hpf90: Filter<44100>,
+    hpf442: Filter<44100>,
+    lpf14k: Filter<44100>,
 }
 
 impl APU {
@@ -52,6 +55,9 @@ impl APU {
             frame_cycle: 0,
             sample_accumulator: 0.0,
             sample_buffer: Vec::with_capacity(48000),
+            hpf90: Filter::new(90.0, true),
+            hpf442: Filter::new(442.0, true),
+            lpf14k: Filter::new(14000.0, false),
         }
     }
 
@@ -64,12 +70,12 @@ impl APU {
         self.cycle_accumulator = total_cycles % 2;
 
         self.triag.clock_timer(cycles);
-        self.dmc.clock_timer(cycles, rom);
 
         if apu_ticks > 0 {
             self.pulse1.clock_timer(apu_ticks);
             self.pulse2.clock_timer(apu_ticks);
             self.noise.clock_timer(apu_ticks);
+            self.dmc.clock_timer(apu_ticks, rom);
 
             let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
             self.frame_cycle += apu_ticks;
@@ -81,7 +87,7 @@ impl APU {
             };
 
             if self.frame_cycle >= frame_length {
-                self.frame_cycle %= frame_length;
+                self.frame_cycle -= frame_length;
             }
 
             let new_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
@@ -94,7 +100,8 @@ impl APU {
         self.generate_samples(cycles);
 
         // Check for DMC IRQ (can happen at any time)
-        if self.dmc.irq_flag {
+        if self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT) {
+            self.status.insert(APUStatus::DMC_INTERRUPT);
             self.irq_sig = true;
         }
     }
@@ -115,7 +122,8 @@ impl APU {
                 self.clock_envelopes();
                 self.clock_length_and_sweep();
 
-                self.irq_sig = self.frame_counter.emit_irq();
+                self.status
+                    .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
             }
             4 if self.frame_counter.is_five_mode() => {
                 self.clock_envelopes();
@@ -178,10 +186,10 @@ impl APU {
         if self.dmc.bytes_remaining() > 0 {
             res |= 0x10;
         }
-        if self.status.contains(APUStatus::FRAME_INTERRUPT) {
+        if self.irq_sig {
             res |= 0x40;
         }
-        if self.status.contains(APUStatus::DMC_INTERRUPT) {
+        if self.dmc.irq_flag {
             res |= 0x80;
         }
         self.status.remove(APUStatus::FRAME_INTERRUPT);
@@ -191,6 +199,7 @@ impl APU {
 
     pub fn write_status(&mut self, val: u8) {
         self.status.update(val);
+        self.dmc.clear_interrupt();
         // If bit is 0, length counter must be cleared immediately
         if !self.status.contains(APUStatus::PULSE_CHANNEL1) {
             self.pulse1.length_counter = 0;
@@ -219,9 +228,9 @@ impl APU {
 
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
-            self.dmc.start_playback();
+            self.dmc.start();
         } else {
-            self.dmc.stop_playback();
+            self.dmc.stop(); // Sets bytes_remaining to 0
         }
     }
 
@@ -229,7 +238,6 @@ impl APU {
         self.frame_counter.update(value);
         if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
-            self.status.remove(APUStatus::DMC_INTERRUPT);
             self.irq_sig = false;
         }
 
@@ -240,19 +248,40 @@ impl APU {
         }
     }
 
-    fn mix_channels(&self) -> f32 {
+    fn mix_channels(&mut self) -> f32 {
         let pulse1_out = self.pulse1.output();
         let pulse2_out = self.pulse2.output();
         let triangle_out = self.triag.output();
         let noise_out = self.noise.output();
         let dmc_out = self.dmc.output();
 
-        let square_out = 0.00752 * (pulse1_out + pulse2_out) as f32;
+        // eprintln!(
+        //     "CYC:{} p1={} p2={} t={} n={} dmc={}",
+        //     self.cycles, pulse1_out, pulse2_out, triangle_out, noise_out, dmc_out,
+        // );
 
-        let tnd_out = 0.00851 * (3 * triangle_out) as f32
-            + 0.00494 * (2 * noise_out) as f32
-            + 0.00335 * dmc_out as f32;
+        let pulse_sum = pulse1_out + pulse2_out;
+        let pulse_out = if pulse_sum == 0 {
+            0.0
+        } else {
+            95.88 / (8128.0 / pulse_sum as f32 + 100.0)
+        };
 
-        square_out + tnd_out
+        let tnd_sum = triangle_out + noise_out + dmc_out;
+        let tnd_out = if tnd_sum == 0 {
+            0.0
+        } else {
+            159.79
+                / (1.0
+                    / ((triangle_out as f32 / 8277.0)
+                        + (noise_out as f32 / 12241.0)
+                        + (dmc_out as f32 / 22638.0))
+                    + 100.0)
+        };
+
+        let output = pulse_out + tnd_out;
+
+        self.lpf14k
+            .filter(self.hpf442.filter(self.hpf90.filter(output)))
     }
 }

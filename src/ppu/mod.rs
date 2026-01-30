@@ -26,6 +26,10 @@ pub struct PPU {
     pub frame_buffer: [u8; 256 * 240 * 3],
     bg_scanline: [u8; 256],
     sprite_scanline: [Option<(u8, bool, bool)>; 256],
+
+    // A12 stuff
+    a12_state: bool,
+    a12lo_period: usize,
 }
 
 impl PPU {
@@ -46,13 +50,32 @@ impl PPU {
             frame_buffer: [0; 256 * 240 * 3],
             bg_scanline: [0; 256],
             sprite_scanline: [None; 256],
+            a12_state: false,
+            a12lo_period: 0,
         }
     }
 
-    fn increment_vram_addr(&mut self) {
-        self.internal.increment_v(self.ctrl.vram_addr_increment()); // Use new register system
+    fn increment_vram_addr(&mut self, _rom: &mut Rom) {
+        self.internal.increment_v(self.ctrl.vram_addr_increment());
     }
 
+    pub fn update_a12(&mut self, addr: u16, rom: &mut Rom) {
+        let a12 = (addr & 0x1000) != 0;
+
+        if a12 != self.a12_state {
+            if !a12 {
+                self.a12lo_period = 0; // Reset counter when A12 goes LOW
+            } else {
+                if self.a12lo_period >= 15 {
+                    // Check if it stayed LOW long enough
+                    rom.clock_scanline_irq();
+                }
+            }
+        } else if !a12 {
+            self.a12lo_period += 2; // Increment if it STAYS low
+        }
+        self.a12_state = a12;
+    }
     // Render a single scanline into the frame buffer
     fn render_scanline(&mut self, rom: &mut Rom) {
         // Clear scanline buffers
@@ -80,10 +103,10 @@ impl PPU {
                 // Build the actual nametable address (0x2000 + nametable*0x400 + offset)
                 let nt_base = 0x2000 + (current_nt as u16) * 0x400;
                 let nt_offset = (coarse_y * 32 + coarse_x) as u16;
-                let tile_num = self.read_vram(rom, nt_base + nt_offset);
+                let tile_num = self.peek_vram(rom, nt_base + nt_offset);
 
                 let attr_offset = 0x3C0 + ((coarse_y / 4) * 8 + (coarse_x / 4)) as u16;
-                let attr_byte = self.read_vram(rom, nt_base + attr_offset);
+                let attr_byte = self.peek_vram(rom, nt_base + attr_offset);
 
                 let palette_idx = match (coarse_x % 4 / 2, coarse_y % 4 / 2) {
                     (0, 0) => attr_byte & 0b11,
@@ -224,17 +247,14 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) -> bool {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) {
         self.cycles += cycles as usize;
+        self.handle_cycle_activity(rom, cycles);
         // Check if we've completed a scanline
         if self.cycles >= 341 {
             // Handle end-of-scanline operations for visible scanlines
             if self.scanline < 240 {
                 if self.mask.show_background() || self.mask.show_sprites() {
-                    // Increment X 32 times (once per tile)
-                    for _ in 0..32 {
-                        self.internal.increment_x();
-                    }
                     // Increment Y at end of visible scanline
                     self.internal.increment_y();
                     // Copy horizontal scroll from t to v
@@ -246,10 +266,6 @@ impl PPU {
             // Pre-render scanline (261) - copy vertical scroll
             if self.scanline == 261 {
                 if self.mask.show_background() || self.mask.show_sprites() {
-                    // Increment X 32 times on pre-render scanline too
-                    for _ in 0..32 {
-                        self.internal.increment_x();
-                    }
                     // Copy vertical scroll from t to v
                     self.internal.copy_vertical();
                 }
@@ -271,13 +287,6 @@ impl PPU {
                 self.scanline = 0;
                 self.nmi_interrupt = None;
             }
-            // self.ctrl.bknd_pattern_addr() == 0 && self.ctrl.sprt_pattern_addr() == 0x1000
-            true
-        } else {
-            // self.cycles >= 324
-            //     && self.ctrl.bknd_pattern_addr() == 0x1000
-            //     && self.ctrl.sprt_pattern_addr() == 0
-            false
         }
     }
 
@@ -288,7 +297,6 @@ impl PPU {
     pub fn write_to_ctrl(&mut self, value: u8) {
         let before_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
         self.ctrl.update(value);
-        // Update nametable select in t register
         self.internal.update_nametable_from_ctrl(value);
         if !before_nmi_status
             && self.ctrl.contains(ControlRegister::GENERATE_NMI)
@@ -309,7 +317,7 @@ impl PPU {
     pub fn read_status(&mut self) -> u8 {
         let data = self.status.bits();
         self.status.remove(StatusRegister::VBLANK_STARTED);
-        self.internal.reset_latch(); // Reset new register latch too
+        self.internal.reset_latch();
         data
     }
 
@@ -327,32 +335,24 @@ impl PPU {
     }
 
     pub fn write_to_scroll(&mut self, value: u8) {
-        self.internal.write_scroll(value); // Use new register system
+        self.internal.write_scroll(value);
     }
 
-    pub fn write_to_ppu_addr(&mut self, rom: &mut Rom, value: u8) {
-        self.internal.write_addr(value); // Use new register system
-        // After writing to PPUADDR, notify mapper of the new address
-        // This allows MMC3 to clock IRQ counter via $2006 writes
-        let addr = self.internal.get_v();
-        if addr <= 0x1FFF {
-            rom.ppu_tick(addr);
-        }
+    pub fn write_to_ppu_addr(&mut self, _rom: &mut Rom, value: u8) {
+        self.internal.write_addr(value);
     }
 
     pub fn read_data(&mut self, rom: &mut Rom) -> u8 {
         let addr = self.internal.get_v();
-        self.increment_vram_addr();
+        self.increment_vram_addr(rom);
 
         match addr {
             0..=0x3EFF => {
-                // Buffered read for CHR/nametables
                 let result = self.internal_data_buf;
                 self.internal_data_buf = self.read_vram(rom, addr);
                 result
             }
             0x3F00..=0x3FFF => {
-                // Palette reads are immediate
                 self.internal_data_buf = self.read_vram(rom, addr - 0x1000);
                 self.read_vram(rom, addr)
             }
@@ -363,7 +363,7 @@ impl PPU {
     pub fn write_data(&mut self, rom: &mut Rom, val: u8) {
         let addr = self.internal.get_v();
         self.write_vram(rom, addr, val);
-        self.increment_vram_addr();
+        self.increment_vram_addr(rom);
     }
 
     pub fn write_oam_dma(&mut self, data: &[u8; 256]) {
@@ -373,46 +373,32 @@ impl PPU {
         }
     }
 
-    // Internal VRAM/CHR access
-    fn read_vram(&self, rom: &mut Rom, addr: u16) -> u8 {
-        let addr = addr & 0x3FFF; // Mirror down to 14-bit address space
+    fn read_vram(&mut self, rom: &mut Rom, addr: u16) -> u8 {
+        let addr = addr & 0x3FFF;
+        self.update_a12(addr, rom);
 
         match addr {
-            0x0000..=0x1FFF => {
-                rom.ppu_tick(addr);
-                rom.read_chr(addr)
-            }
+            0x0000..=0x1FFF => rom.read_chr(addr),
             0x2000..=0x2FFF => {
-                // Nametables (with mirroring)
                 let mirrored_addr = self.mirror_vram_addr(addr, rom.mirroring());
                 self.vram[mirrored_addr as usize]
             }
             0x3000..=0x3EFF => {
-                // Mirror of 0x2000-0x2EFF
                 let mirrored_addr = self.mirror_vram_addr(addr - 0x1000, rom.mirroring());
                 self.vram[mirrored_addr as usize]
             }
-            0x3F00..=0x3FFF => {
-                // Palette RAM
-                let palette_addr = (addr - 0x3F00) & 0x1F;
-                // Handle palette mirroring
-                let palette_addr = if palette_addr == 0x10
-                    || palette_addr == 0x14
-                    || palette_addr == 0x18
-                    || palette_addr == 0x1C
-                {
-                    palette_addr - 0x10
-                } else {
-                    palette_addr
-                };
-                self.palette_table[palette_addr as usize]
+            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
+                let add_mirror = addr - 0x10;
+                self.palette_table[(add_mirror - 0x3F00) as usize]
             }
+            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
             _ => 0,
         }
     }
 
     fn write_vram(&mut self, rom: &mut Rom, addr: u16, val: u8) {
         let addr = addr & 0x3FFF;
+        self.update_a12(addr, rom);
 
         match addr {
             0x0000..=0x1FFF => {
@@ -426,10 +412,9 @@ impl PPU {
                 let mirrored_addr = self.mirror_vram_addr(addr - 0x1000, rom.mirroring());
                 self.vram[mirrored_addr as usize] = val;
             }
-
-            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1c => {
+            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
                 let add_mirror = addr - 0x10;
-                self.palette_table[(add_mirror - 0x3f00) as usize] = val;
+                self.palette_table[(add_mirror - 0x3F00) as usize] = val;
             }
             0x3F00..=0x3FFF => {
                 self.palette_table[(addr - 0x3F00) as usize] = val;
@@ -439,8 +424,8 @@ impl PPU {
     }
 
     fn mirror_vram_addr(&self, addr: u16, mirroring: Mirroring) -> u16 {
-        let vram_index = (addr & 0x2FFF) - 0x2000; // 0x2000-0x2FFF -> 0x0000-0x0FFF
-        let nametable = vram_index / 0x0400; // Which nametable (0-3)
+        let vram_index = (addr & 0x2FFF) - 0x2000;
+        let nametable = vram_index / 0x0400;
 
         match mirroring {
             Mirroring::Horizontal => match nametable {
@@ -455,11 +440,81 @@ impl PPU {
             },
             Mirroring::SingleScreenLower => vram_index & 0x03FF,
             Mirroring::SingleScreenUpper => (vram_index & 0x03FF) + 0x0400,
-            Mirroring::FourScreen => vram_index, // Not supported in 2KB VRAM
+            Mirroring::FourScreen => vram_index,
         }
     }
 
-    pub fn get_current_vram_addr(&self) -> u16 {
-        self.internal.get_v()
+    fn peek_vram(&self, rom: &Rom, addr: u16) -> u8 {
+        let addr = addr & 0x3FFF;
+        match addr {
+            0x0000..=0x1FFF => rom.read_chr(addr),
+            0x2000..=0x2FFF => {
+                let mirrored_addr = self.mirror_vram_addr(addr, rom.mirroring());
+                self.vram[mirrored_addr as usize]
+            }
+            0x3000..=0x3EFF => {
+                let mirrored_addr = self.mirror_vram_addr(addr - 0x1000, rom.mirroring());
+                self.vram[mirrored_addr as usize]
+            }
+            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
+                let add_mirror = addr - 0x10;
+                self.palette_table[(add_mirror - 0x3F00) as usize]
+            }
+            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
+            _ => 0,
+        }
+    }
+
+    fn handle_cycle_activity(&mut self, rom: &mut Rom, cycles: u8) {
+        for _ in 0..cycles {
+            if !self.mask.show_background() && !self.mask.show_sprites() {
+                continue;
+            }
+            // See: https://www.nesdev.org/wiki/PPU_rendering#Line-by-line_timing
+            match self.scanline {
+                0..=239 | 261 => {
+                    match self.cycles {
+                        // 1. Visible Cycle Fetches (1-256) & Prefetch (321-336)
+                        // Pattern: NT(L), AT(L), TileLow(H?), TileHigh(H?)
+                        1..=256 | 321..=336 => {
+                            let phase = self.cycles % 8;
+                            match phase {
+                                1 | 2 => {
+                                    // Nametable Fetch (A12 is always LOW for $2000-$2FFF)
+                                    self.update_a12(0x2000, rom);
+                                }
+                                3 | 4 => {
+                                    // Attribute Fetch (A12 is always LOW)
+                                    self.update_a12(0x23C0, rom);
+                                }
+                                5 | 6 => {
+                                    // BG Tile Low (A12 depends on BG Control Bit)
+                                    self.update_a12(self.ctrl.bknd_pattern_addr(), rom);
+                                }
+                                0 | 7 => {
+                                    // BG Tile High (A12 depends on BG Control Bit)
+                                    self.update_a12(self.ctrl.bknd_pattern_addr(), rom);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // 2. Sprite Fetches (257-320)
+                        // PPU fetches 8 sprites. If using $1000 for sprites, A12 stays HIGH here.
+                        257..=320 => {
+                            self.update_a12(self.ctrl.sprt_pattern_addr(), rom);
+                        }
+
+                        // 3. Unused Nametable Fetches (337-340)
+                        // These are crucial "dummy" reads that set A12 LOW at the end of the line.
+                        337..=340 => {
+                            self.update_a12(0x2000, rom);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
