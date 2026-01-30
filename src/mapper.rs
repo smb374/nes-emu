@@ -11,10 +11,14 @@ impl MapperType {
     pub fn mapper_mirroring(&self) -> Option<Mirroring> {
         match self {
             MapperType::MMC1(s) => Some(s.mirroring()),
-            MapperType::MMC3(s) => Some(if s.arr_select {
-                Mirroring::Horizontal
+            MapperType::MMC3(s) => Some(if s.is_four_screen {
+                Mirroring::FourScreen
             } else {
-                Mirroring::Vertical
+                if s.arr_select {
+                    Mirroring::Horizontal
+                } else {
+                    Mirroring::Vertical
+                }
             }),
             _ => None, // Use hardware mirroring from ROM header
         }
@@ -99,8 +103,7 @@ impl MMC1State {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MMC3State {
-    pub chr_page: [u8; 6],
-    pub prg_page: [u8; 2],
+    pub banks: [u8; 8],
     pub chr_map: [u8; 8], // 1KB banks
     pub prg_map: [u8; 4], // 8KB banks
     pub command: u8,
@@ -117,14 +120,17 @@ pub struct MMC3State {
     pub arr_select: bool,
     pub prg_ram_enable: bool,
     pub last_a12: bool,
+    pub prg_banks: u8,
+    pub chr_banks: u8,
+    pub is_four_screen: bool,
 }
 
 impl MMC3State {
-    pub fn new(prg_pages: u8) -> Self {
+    pub fn new(prg_pages: u8, chr_pages: u8, is_four_screen: bool) -> Self {
         let last_page = (prg_pages * 2) - 1;
+        let banks = if chr_pages == 0 { 8 } else { chr_pages * 8 };
         Self {
-            chr_page: [0u8; 6],
-            prg_page: [0u8; 2],
+            banks: [0u8; 8],
             chr_map: [0, 1, 2, 3, 4, 5, 6, 7],
             prg_map: [0, 1, last_page - 1, last_page],
             command: 0,
@@ -137,37 +143,49 @@ impl MMC3State {
             arr_select: false,
             prg_ram_enable: true,
             last_a12: false,
+            prg_banks: prg_pages * 2,
+            chr_banks: banks,
+            is_four_screen,
         }
     }
-    pub fn map_pages(&mut self, prg_pages: u8) {
+    pub fn map_pages(&mut self) {
         if self.chr_swap {
             self.chr_map = [
-                self.chr_page[2],
-                self.chr_page[3],
-                self.chr_page[4],
-                self.chr_page[5],
-                self.chr_page[0],
-                self.chr_page[0] + 1,
-                self.chr_page[1],
-                self.chr_page[1] + 1,
+                self.banks[2] % self.chr_banks,
+                self.banks[3] % self.chr_banks,
+                self.banks[4] % self.chr_banks,
+                self.banks[5] % self.chr_banks,
+                self.banks[0] % self.chr_banks,
+                (self.banks[0] + 1) % self.chr_banks,
+                self.banks[1] % self.chr_banks,
+                (self.banks[1] + 1) % self.chr_banks,
             ];
         } else {
             self.chr_map = [
-                self.chr_page[0],
-                self.chr_page[0] + 1,
-                self.chr_page[1],
-                self.chr_page[1] + 1,
-                self.chr_page[2],
-                self.chr_page[3],
-                self.chr_page[4],
-                self.chr_page[5],
+                self.banks[0] % self.chr_banks,
+                (self.banks[0] + 1) % self.chr_banks,
+                self.banks[1] % self.chr_banks,
+                (self.banks[1] + 1) % self.chr_banks,
+                self.banks[2] % self.chr_banks,
+                self.banks[3] % self.chr_banks,
+                self.banks[4] % self.chr_banks,
+                self.banks[5] % self.chr_banks,
             ];
         }
-        let last_page = (prg_pages * 2) - 1;
         if self.prg_swap {
-            self.prg_map = [last_page - 1, self.prg_page[1], self.prg_page[0], last_page];
+            self.prg_map = [
+                self.prg_banks - 2,
+                self.banks[7] % self.prg_banks,
+                self.banks[6] % self.prg_banks,
+                self.prg_banks - 1,
+            ];
         } else {
-            self.prg_map = [self.prg_page[0], self.prg_page[1], last_page - 1, last_page];
+            self.prg_map = [
+                self.banks[6] % self.prg_banks,
+                self.banks[7] % self.prg_banks,
+                self.prg_banks - 2,
+                self.prg_banks - 1,
+            ];
         }
     }
 }

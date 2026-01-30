@@ -71,38 +71,23 @@ impl PPU {
             let coarse_y = self.internal.coarse_y() as usize;
             let nametable_bits = self.internal.nametable();
 
-            let nametable_base = match (self.mirroring(), nametable_bits) {
-                (Mirroring::Vertical, 0)
-                | (Mirroring::Vertical, 2)
-                | (Mirroring::Horizontal, 0)
-                | (Mirroring::Horizontal, 1) => 0,
-                (Mirroring::Vertical, 1)
-                | (Mirroring::Vertical, 3)
-                | (Mirroring::Horizontal, 2)
-                | (Mirroring::Horizontal, 3) => 0x400,
-                _ => 0,
-            };
-
             for tile_idx in 0..33 {
                 let coarse_x = ((self.internal.coarse_x() as usize + tile_idx) & 0x1F) as usize;
-                let mut current_nt_base = nametable_base;
-                if tile_idx >= 32 - self.internal.coarse_x() as usize {
-                    current_nt_base ^= 0x400;
+
+                // Handle horizontal wrapping to next nametable
+                let mut current_nt = nametable_bits;
+                if coarse_x < self.internal.coarse_x() as usize {
+                    // Wrapped around, switch to horizontal neighbor
+                    current_nt ^= 1;
                 }
 
-                let nt_offset = coarse_y * 32 + coarse_x;
-                let tile_num = if current_nt_base + nt_offset < self.vram.len() {
-                    self.vram[current_nt_base + nt_offset]
-                } else {
-                    0
-                };
+                // Build the actual nametable address (0x2000 + nametable*0x400 + offset)
+                let nt_base = 0x2000 + (current_nt as u16) * 0x400;
+                let nt_offset = (coarse_y * 32 + coarse_x) as u16;
+                let tile_num = self.read_vram(nt_base + nt_offset);
 
-                let attr_offset = 0x3C0 + (coarse_y / 4) * 8 + (coarse_x / 4);
-                let attr_byte = if current_nt_base + attr_offset < self.vram.len() {
-                    self.vram[current_nt_base + attr_offset]
-                } else {
-                    0
-                };
+                let attr_offset = 0x3C0 + ((coarse_y / 4) * 8 + (coarse_x / 4)) as u16;
+                let attr_byte = self.read_vram(nt_base + attr_offset);
 
                 let palette_idx = match (coarse_x % 4 / 2, coarse_y % 4 / 2) {
                     (0, 0) => attr_byte & 0b11,
@@ -451,27 +436,21 @@ impl PPU {
     }
 
     fn mirror_vram_addr(&self, addr: u16) -> u16 {
-        use crate::mapper::Mirroring;
-
         let mirroring = self.rom.borrow().mirroring();
         let vram_index = (addr & 0x2FFF) - 0x2000; // 0x2000-0x2FFF -> 0x0000-0x0FFF
         let nametable = vram_index / 0x0400; // Which nametable (0-3)
 
         match mirroring {
-            Mirroring::Horizontal => {
-                // 0,0; 1,0
-                // 0,1; 1,1
-                match nametable {
-                    0 | 1 => vram_index & 0x03FF,
-                    2 | 3 => (vram_index & 0x03FF) + 0x0400,
-                    _ => unreachable!(),
-                }
-            }
-            Mirroring::Vertical => {
-                // 0,0; 0,1
-                // 1,0; 1,1
-                vram_index & 0x07FF
-            }
+            Mirroring::Horizontal => match nametable {
+                0 | 1 => vram_index & 0x03FF,
+                2 | 3 => (vram_index & 0x03FF) + 0x0400,
+                _ => unreachable!(),
+            },
+            Mirroring::Vertical => match nametable {
+                0 | 2 => vram_index & 0x03FF,
+                1 | 3 => (vram_index & 0x03FF) + 0x0400,
+                _ => unreachable!(),
+            },
             Mirroring::SingleScreenLower => vram_index & 0x03FF,
             Mirroring::SingleScreenUpper => (vram_index & 0x03FF) + 0x0400,
             Mirroring::FourScreen => vram_index, // Not supported in 2KB VRAM

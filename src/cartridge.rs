@@ -74,7 +74,11 @@ impl Rom {
             1 => MapperType::MMC1(MMC1State::new(header.prg_pages)),
             2 => MapperType::UxROM(UxROMState::default()),
             3 => MapperType::CNROM(CNROMState::default()),
-            4 => MapperType::MMC3(MMC3State::new(header.prg_pages)),
+            4 => MapperType::MMC3(MMC3State::new(
+                header.prg_pages,
+                header.chr_pages,
+                hardware_mirroring == Mirroring::FourScreen,
+            )),
             _ => {
                 return Err(format!(
                     "Mapper {} is not supported currently",
@@ -313,17 +317,17 @@ impl Rom {
                 0x8000 => {
                     state.chr_swap = val & 0x80 != 0;
                     state.prg_swap = val & 0x40 != 0;
-                    state.map_pages(self.header.prg_pages);
+                    state.map_pages();
                     state.command = val & 0x07;
                 }
                 0x8001 => {
                     match state.command {
-                        0 | 1 => state.chr_page[state.command as usize] = val & 0xFE,
-                        2..=5 => state.chr_page[state.command as usize] = val,
-                        6 | 7 => state.prg_page[state.command as usize - 6] = val,
+                        0 | 1 => state.banks[state.command as usize] = val & 0xFE,
+                        2..=5 => state.banks[state.command as usize] = val,
+                        6 | 7 => state.banks[state.command as usize] = val & 0x3F,
                         _ => unreachable!(),
                     }
-                    state.map_pages(self.header.prg_pages);
+                    state.map_pages();
                 }
                 0xA000 => {
                     state.arr_select = val & 0x01 != 0;
