@@ -54,22 +54,22 @@ impl APU {
             cycle_accumulator: 0,
             frame_cycle: 0,
             sample_accumulator: 0.0,
-            sample_buffer: Vec::with_capacity(4096),
+            sample_buffer: Vec::with_capacity(48000),
             rom,
         }
     }
 
-    pub fn tick(&mut self, cycles: u16) -> u16 {
+    pub fn tick(&mut self, cycles: u16) {
         let cycles = cycles as usize;
         self.cycles += cycles;
 
-        self.triag.clock_timer(cycles);
-        let stall = self
-            .dmc
-            .clock_timer(cycles, self.rom.borrow_mut().deref_mut());
         let total_cycles = self.cycle_accumulator + cycles;
         let apu_ticks = total_cycles / 2;
         self.cycle_accumulator = total_cycles % 2;
+
+        self.triag.clock_timer(cycles);
+        self.dmc
+            .clock_timer(cycles, self.rom.borrow_mut().deref_mut());
 
         if apu_ticks > 0 {
             self.pulse1.clock_timer(apu_ticks);
@@ -102,8 +102,6 @@ impl APU {
         if self.dmc.irq_flag {
             self.irq_sig = true;
         }
-
-        stall
     }
 
     fn clock_frame_sequencer(&mut self, quarter_frame: usize) {
@@ -192,8 +190,6 @@ impl APU {
             res |= 0x80;
         }
         self.status.remove(APUStatus::FRAME_INTERRUPT);
-        self.status.remove(APUStatus::DMC_INTERRUPT);
-        self.dmc.irq_flag = false; // Clear DMC IRQ flag on read
         self.irq_sig = false;
         res
     }
@@ -238,6 +234,7 @@ impl APU {
         self.frame_counter.update(value);
         if value & 0x40 != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
+            self.status.remove(APUStatus::DMC_INTERRUPT);
             self.irq_sig = false;
         }
 
@@ -255,21 +252,11 @@ impl APU {
         let noise_out = self.noise.output();
         let dmc_out = self.dmc.output();
 
-        let square_sum = pulse1_out + pulse2_out;
-        let square_out = if square_sum == 0 {
-            0.0
-        } else {
-            95.88 / (8128.0 / square_sum as f32 + 100.0)
-        };
+        let square_out = 0.00752 * (pulse1_out + pulse2_out) as f32;
 
-        let tnd_sum = 3.0 * triangle_out as f32 / 8227.0
-            + 2.0 * noise_out as f32 / 12241.0
-            + dmc_out as f32 / 22638.0;
-        let tnd_out = if tnd_sum == 0.0 {
-            0.0
-        } else {
-            159.79 / (1.0 / tnd_sum + 100.0)
-        };
+        let tnd_out = 0.00851 * (3 * triangle_out) as f32
+            + 0.00494 * (2 * noise_out) as f32
+            + 0.00335 * dmc_out as f32;
 
         square_out + tnd_out
     }
