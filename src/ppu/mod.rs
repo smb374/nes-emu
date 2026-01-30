@@ -107,6 +107,10 @@ impl PPU {
                     let screen_x = (tile_idx * 8 + pixel).wrapping_sub(fine_x as usize);
 
                     if screen_x < 256 {
+                        if screen_x < 8 && !self.mask.show_leftmost_background() {
+                            self.bg_scanline[screen_x] = 0;
+                            continue;
+                        }
                         if color_bits == 0 {
                             self.bg_scanline[screen_x] = 0;
                         } else {
@@ -168,6 +172,9 @@ impl PPU {
                     }
 
                     let screen_x = sprite_x + pixel;
+                    if screen_x < 8 && !self.mask.show_leftmost_sprites() {
+                        continue;
+                    }
                     if screen_x < 256 && self.sprite_scanline[screen_x].is_none() {
                         let palette_value = 16 + palette_idx * 4 + color_bits;
                         self.sprite_scanline[screen_x] =
@@ -227,6 +234,8 @@ impl PPU {
         if self.cycles >= 341 {
             // Handle end-of-scanline operations for visible scanlines
             if self.scanline < 240 {
+                // Render the completed scanline
+                self.render_scanline();
                 if self.mask.show_background() || self.mask.show_sprites() {
                     // Increment X 32 times (once per tile)
                     for _ in 0..32 {
@@ -238,11 +247,15 @@ impl PPU {
                     self.internal.copy_horizontal();
                 }
 
-                self.rom.borrow_mut().ppu_tick(0x0000); // A12=0 (pattern table $0xxx)
-                self.rom.borrow_mut().ppu_tick(0x1000); // A12=1 (pattern table $1xxx)
+                if self.mask.show_background() || self.mask.show_sprites() {
+                    let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
+                    let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
-                // Render the completed scanline
-                self.render_scanline();
+                    if bg_table != spr_table {
+                        self.rom.borrow_mut().ppu_tick(0x0000); // Simulate BG fetch (Low)
+                        self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
+                    }
+                }
             }
             // Pre-render scanline (261) - copy vertical scroll
             if self.scanline == 261 {
@@ -254,10 +267,14 @@ impl PPU {
                     // Copy vertical scroll from t to v
                     self.internal.copy_vertical();
 
-                    // Notify mapper of PPU address changes on pre-render scanline too
-                    for _ in 0..42 {
-                        self.rom.borrow_mut().ppu_tick(0x0000);
-                        self.rom.borrow_mut().ppu_tick(0x1000);
+                    if self.mask.show_background() || self.mask.show_sprites() {
+                        let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
+                        let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
+
+                        if bg_table != spr_table {
+                            self.rom.borrow_mut().ppu_tick(0x0000); // Simulate BG fetch (Low)
+                            self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
+                        }
                     }
                 }
                 // Clear VBlank and sprite 0 hit flags

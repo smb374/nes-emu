@@ -144,6 +144,14 @@ impl MaskRegister {
     pub fn update(&mut self, data: u8) {
         *self = Self::from_bits_retain(data);
     }
+
+    pub fn show_leftmost_background(&self) -> bool {
+        self.contains(Self::LEFTMOST_8PXL_BG)
+    }
+
+    pub fn show_leftmost_sprites(&self) -> bool {
+        self.contains(Self::LEFTMOST_8PXL_SP)
+    }
 }
 
 bitflags! {
