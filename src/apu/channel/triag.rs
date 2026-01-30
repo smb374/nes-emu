@@ -66,7 +66,7 @@ impl TriangleChannel {
 
     pub fn clock_length(&mut self) {
         // Length counter only decrements if control flag is clear
-        if self.counter & 0x80 == 0 && self.length_counter != 0 {
+        if (self.counter & 0x80) == 0 && self.length_counter != 0 {
             self.length_counter -= 1;
         }
     }

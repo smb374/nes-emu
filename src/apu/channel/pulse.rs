@@ -99,14 +99,14 @@ impl PulseChannel {
     }
     pub fn update_volume(&mut self, val: u8) {
         self.duty_mode = (val & 0xC0) >> 6;
-        self.loop_flag = val & 0x20 != 0;
-        self.const_volume = val & 0x10 != 0;
+        self.loop_flag = (val & 0x20) != 0;
+        self.const_volume = (val & 0x10) != 0;
         self.load_volume = val & 0x0F;
     }
     pub fn update_sweep(&mut self, val: u8) {
-        self.sweep_enabled = val & 0x80 != 0;
+        self.sweep_enabled = (val & 0x80) != 0;
         self.sweep_period = (val & 0x70) >> 4;
-        self.sweep_negate = val & 0x08 != 0;
+        self.sweep_negate = (val & 0x08) != 0;
         self.sweep_shamt = val & 0x07;
     }
 }

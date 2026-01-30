@@ -242,10 +242,8 @@ impl PPU {
                     let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
                     let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
-                    if bg_table != spr_table {
-                        rom.ppu_tick(0x0000); // Simulate BG fetch (Low)
-                        rom.ppu_tick(0x1000); // Simulate Sprite fetch (High)
-                    }
+                    rom.ppu_tick(bg_table);
+                    rom.ppu_tick(spr_table);
                 }
                 // Render the completed scanline
                 self.render_scanline(rom);
@@ -263,10 +261,8 @@ impl PPU {
                     let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
                     let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
-                    if bg_table != spr_table {
-                        rom.ppu_tick(0x0000); // Simulate BG fetch (Low)
-                        rom.ppu_tick(0x1000); // Simulate Sprite fetch (High)
-                    }
+                    rom.ppu_tick(bg_table);
+                    rom.ppu_tick(spr_table);
                 }
                 // Clear VBlank and sprite 0 hit flags
                 self.status.remove(StatusRegister::VBLANK_STARTED);

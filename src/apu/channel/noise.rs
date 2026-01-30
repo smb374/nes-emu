@@ -94,15 +94,15 @@ impl NoiseChannel {
     }
 
     pub fn update_volume(&mut self, val: u8) {
-        self.loop_flag = val & 0x20 != 0;
-        self.const_volume = val & 0x10 != 0;
+        self.loop_flag = (val & 0x20) != 0;
+        self.const_volume = (val & 0x10) != 0;
         self.load_volume = val & 0x0F;
     }
 }
 
 impl TimedChannel for NoiseChannel {
     fn update_period_lo(&mut self, val: u8) {
-        self.mode = val & 0x80 != 0;
+        self.mode = (val & 0x80) != 0;
         self.timer_period = NOISE_PERIOD_TABLE[(val & 0x0F) as usize];
     }
 

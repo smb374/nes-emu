@@ -252,13 +252,13 @@ impl<'a> CPU<'a> {
             }
             ASL => {
                 if op.mode == Some(ACC) {
-                    self.status.set(CpuFlags::CARRY, self.reg_a & 0x80 != 0);
+                    self.status.set(CpuFlags::CARRY, (self.reg_a & 0x80) != 0);
                     self.reg_a <<= 1;
                     self.update_nz(self.reg_a);
                 } else {
                     let addr = self.operand_addr(op.mode).unwrap();
                     let mut val = self.read_u8(addr);
-                    self.status.set(CpuFlags::CARRY, val & 0x80 != 0);
+                    self.status.set(CpuFlags::CARRY, (val & 0x80) != 0);
                     val <<= 1;
                     self.update_nz(val);
                     self.write_u8(addr, val);
@@ -272,8 +272,8 @@ impl<'a> CPU<'a> {
                 let val = self.read_u8(addr);
                 let res = self.reg_a & val;
                 self.status.set(CpuFlags::ZERO, res == 0);
-                self.status.set(CpuFlags::OVERFLOW, val & 0x40 != 0);
-                self.status.set(CpuFlags::NEGATIVE, val & 0x80 != 0);
+                self.status.set(CpuFlags::OVERFLOW, (val & 0x40) != 0);
+                self.status.set(CpuFlags::NEGATIVE, (val & 0x80) != 0);
             }
             BMI => self.branch_if(self.status.contains(CpuFlags::NEGATIVE)),
             BNE => self.branch_if(!self.status.contains(CpuFlags::ZERO)),
@@ -363,13 +363,13 @@ impl<'a> CPU<'a> {
             }
             LSR => {
                 if op.mode == Some(ACC) {
-                    self.status.set(CpuFlags::CARRY, self.reg_a & 0x01 != 0);
+                    self.status.set(CpuFlags::CARRY, (self.reg_a & 0x01) != 0);
                     self.reg_a >>= 1;
                     self.update_nz(self.reg_a);
                 } else {
                     let addr = self.operand_addr(op.mode).unwrap();
                     let mut val = self.read_u8(addr);
-                    self.status.set(CpuFlags::CARRY, val & 0x01 != 0);
+                    self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
                     val >>= 1;
                     self.update_nz(val);
                     self.write_u8(addr, val);
@@ -530,7 +530,7 @@ impl<'a> CPU<'a> {
                 let val = self.reg_a & self.read_u8(addr);
                 self.reg_a = val >> 1;
                 self.update_nz(self.reg_a);
-                self.status.set(CpuFlags::CARRY, val & 1 != 0);
+                self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
             }
             ATX => {
                 let addr = self.operand_addr(op.mode).unwrap();
@@ -643,7 +643,7 @@ impl<'a> CPU<'a> {
                 let addr = self.operand_addr(op.mode).unwrap();
                 {
                     let mut val = self.read_u8(addr);
-                    self.status.set(CpuFlags::CARRY, val & 0x80 != 0);
+                    self.status.set(CpuFlags::CARRY, (val & 0x80) != 0);
                     val <<= 1;
                     self.update_nz(val);
                     self.write_u8(addr, val);
@@ -657,7 +657,7 @@ impl<'a> CPU<'a> {
                 let addr = self.operand_addr(op.mode).unwrap();
                 {
                     let mut val = self.read_u8(addr);
-                    self.status.set(CpuFlags::CARRY, val & 0x01 != 0);
+                    self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
                     val >>= 1;
                     self.update_nz(val);
                     self.write_u8(addr, val);

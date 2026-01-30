@@ -205,7 +205,7 @@ impl Rom {
 
     pub fn ppu_tick(&mut self, ppu_addr: u16) {
         if let MapperType::MMC3(ref mut state) = self.mapper {
-            let a12 = ppu_addr & 0x1000 != 0;
+            let a12 = (ppu_addr & 0x1000) != 0;
 
             if a12 && !state.last_a12 {
                 if state.irq_counter == 0 || state.irq_reload {
@@ -285,7 +285,7 @@ impl Rom {
 
             MapperType::MMC1(ref mut state) => {
                 // Reset on bit 7 set
-                if val & 0x80 != 0 {
+                if (val & 0x80) != 0 {
                     state.shift_register = 0;
                     state.shift_count = 0;
                     state.control |= 0x0C; // Lock PRG to mode 3
@@ -315,8 +315,8 @@ impl Rom {
 
             MapperType::MMC3(ref mut state) => match addr & 0xE001 {
                 0x8000 => {
-                    state.chr_swap = val & 0x80 != 0;
-                    state.prg_swap = val & 0x40 != 0;
+                    state.chr_swap = (val & 0x80) != 0;
+                    state.prg_swap = (val & 0x40) != 0;
                     state.map_pages();
                     state.command = val & 0x07;
                 }
@@ -330,10 +330,10 @@ impl Rom {
                     state.map_pages();
                 }
                 0xA000 => {
-                    state.arr_select = val & 0x01 != 0;
+                    state.arr_select = (val & 0x01) != 0;
                 }
                 0xA001 => {
-                    state.prg_ram_enable = val & 0x80 != 0;
+                    state.prg_ram_enable = (val & 0x80) != 0;
                 }
                 0xC000 => {
                     state.irq_latch = val;

@@ -116,8 +116,8 @@ impl DMCChannel {
     }
 
     pub fn write_flags(&mut self, val: u8) {
-        self.irq_enabled = val & 0x80 != 0;
-        self.loop_flag = val & 0x40 != 0;
+        self.irq_enabled = (val & 0x80) != 0;
+        self.loop_flag = (val & 0x40) != 0;
 
         if !self.irq_enabled {
             self.irq_flag = false;

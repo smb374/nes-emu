@@ -97,7 +97,7 @@ impl MMC1State {
     }
 
     pub fn chr_mode(&self) -> bool {
-        (self.control >> 4) & 0x01 != 0
+        ((self.control >> 4) & 0x01) != 0
     }
 }
 

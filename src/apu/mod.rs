@@ -227,7 +227,7 @@ impl APU {
 
     pub fn write_frame_counter(&mut self, value: u8) {
         self.frame_counter.update(value);
-        if value & 0x40 != 0 {
+        if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
             self.status.remove(APUStatus::DMC_INTERRUPT);
             self.irq_sig = false;
