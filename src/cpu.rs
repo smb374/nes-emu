@@ -131,6 +131,7 @@ impl<'a> CPU<'a> {
 
         self.bus.tick(2);
         self.pc = self.read_u16(0xFFFA);
+        self.bus.tick(5);
     }
 
     fn interrupt_irq(&mut self) {
@@ -144,6 +145,7 @@ impl<'a> CPU<'a> {
 
         self.bus.tick(2);
         self.pc = self.read_u16(0xFFFE);
+        self.bus.tick(5);
     }
 
     fn push_stack_u16(&mut self, val: u16) {

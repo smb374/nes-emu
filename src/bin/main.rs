@@ -44,7 +44,7 @@ fn main() {
     let desired_spec = AudioSpecDesired {
         freq: Some(44100),
         channels: Some(1),
-        samples: Some(2048),
+        samples: Some(1024),
     };
     let audio_device: AudioQueue<f32> = sdl_context
         .audio()
@@ -100,7 +100,7 @@ fn main() {
 
             let max_queue_size = 44100 * 4 / 20;
             while audio_device.size() > max_queue_size {
-                std::thread::sleep(Duration::from_micros(100));
+                std::thread::sleep(Duration::from_nanos(1000));
             }
 
             let now = Instant::now();
