@@ -1,8 +1,6 @@
 mod palette;
 pub mod registers;
 
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     cartridge::Rom,
     mapper::Mirroring,
@@ -10,7 +8,6 @@ use crate::{
 };
 
 pub struct PPU {
-    pub rom: Rc<RefCell<Rom>>,
     pub ctrl: ControlRegister,
     pub mask: MaskRegister,
     pub status: StatusRegister,
@@ -32,9 +29,8 @@ pub struct PPU {
 }
 
 impl PPU {
-    pub fn new(rom: Rc<RefCell<Rom>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            rom,
             ctrl: ControlRegister::new(),
             mask: MaskRegister::new(),
             status: StatusRegister::new(),
@@ -58,7 +54,7 @@ impl PPU {
     }
 
     // Render a single scanline into the frame buffer
-    fn render_scanline(&mut self) {
+    fn render_scanline(&mut self, rom: &mut Rom) {
         // Clear scanline buffers
         self.bg_scanline.fill(0);
         self.sprite_scanline.fill(None);
@@ -84,10 +80,10 @@ impl PPU {
                 // Build the actual nametable address (0x2000 + nametable*0x400 + offset)
                 let nt_base = 0x2000 + (current_nt as u16) * 0x400;
                 let nt_offset = (coarse_y * 32 + coarse_x) as u16;
-                let tile_num = self.read_vram(nt_base + nt_offset);
+                let tile_num = self.read_vram(rom, nt_base + nt_offset);
 
                 let attr_offset = 0x3C0 + ((coarse_y / 4) * 8 + (coarse_x / 4)) as u16;
-                let attr_byte = self.read_vram(nt_base + attr_offset);
+                let attr_byte = self.read_vram(rom, nt_base + attr_offset);
 
                 let palette_idx = match (coarse_x % 4 / 2, coarse_y % 4 / 2) {
                     (0, 0) => attr_byte & 0b11,
@@ -98,8 +94,8 @@ impl PPU {
                 };
 
                 let tile_addr = bank + (tile_num as u16) * 16 + fine_y as u16;
-                let tile_low = self.rom.borrow().read_chr(tile_addr);
-                let tile_high = self.rom.borrow().read_chr(tile_addr + 8);
+                let tile_low = rom.read_chr(tile_addr);
+                let tile_high = rom.read_chr(tile_addr + 8);
 
                 for pixel in 0..8 {
                     let bit = 7 - pixel;
@@ -160,8 +156,8 @@ impl PPU {
                     bank + (tile_num as u16 * 16) + y_offset
                 };
 
-                let tile_low = self.rom.borrow().read_chr(tile_addr);
-                let tile_high = self.rom.borrow().read_chr(tile_addr + 8);
+                let tile_low = rom.read_chr(tile_addr);
+                let tile_high = rom.read_chr(tile_addr + 8);
 
                 for pixel in 0..8 {
                     let bit = if flip_h { pixel } else { 7 - pixel };
@@ -228,7 +224,7 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self, cycles: u16) -> bool {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) -> bool {
         self.cycles += cycles as usize;
         // Check if we've completed a scanline
         if self.cycles >= 341 {
@@ -247,12 +243,12 @@ impl PPU {
                     let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
                     if bg_table != spr_table {
-                        self.rom.borrow_mut().ppu_tick(0x0000); // Simulate BG fetch (Low)
-                        self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
+                        rom.ppu_tick(0x0000); // Simulate BG fetch (Low)
+                        rom.ppu_tick(0x1000); // Simulate Sprite fetch (High)
                     }
                 }
                 // Render the completed scanline
-                self.render_scanline();
+                self.render_scanline(rom);
             }
             // Pre-render scanline (261) - copy vertical scroll
             if self.scanline == 261 {
@@ -268,8 +264,8 @@ impl PPU {
                     let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
                     if bg_table != spr_table {
-                        self.rom.borrow_mut().ppu_tick(0x0000); // Simulate BG fetch (Low)
-                        self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
+                        rom.ppu_tick(0x0000); // Simulate BG fetch (Low)
+                        rom.ppu_tick(0x1000); // Simulate Sprite fetch (High)
                     }
                 }
                 // Clear VBlank and sprite 0 hit flags
@@ -348,7 +344,7 @@ impl PPU {
         self.internal.write_addr(value); // Use new register system
     }
 
-    pub fn read_data(&mut self) -> u8 {
+    pub fn read_data(&mut self, rom: &mut Rom) -> u8 {
         let addr = self.internal.get_v();
         self.increment_vram_addr();
 
@@ -356,21 +352,21 @@ impl PPU {
             0..=0x3EFF => {
                 // Buffered read for CHR/nametables
                 let result = self.internal_data_buf;
-                self.internal_data_buf = self.read_vram(addr);
+                self.internal_data_buf = self.read_vram(rom, addr);
                 result
             }
             0x3F00..=0x3FFF => {
                 // Palette reads are immediate
-                self.internal_data_buf = self.read_vram(addr - 0x1000);
-                self.read_vram(addr)
+                self.internal_data_buf = self.read_vram(rom, addr - 0x1000);
+                self.read_vram(rom, addr)
             }
             _ => 0,
         }
     }
 
-    pub fn write_data(&mut self, val: u8) {
+    pub fn write_data(&mut self, rom: &mut Rom, val: u8) {
         let addr = self.internal.get_v();
-        self.write_vram(addr, val);
+        self.write_vram(rom, addr, val);
         self.increment_vram_addr();
     }
 
@@ -382,22 +378,22 @@ impl PPU {
     }
 
     // Internal VRAM/CHR access
-    fn read_vram(&self, addr: u16) -> u8 {
+    fn read_vram(&self, rom: &mut Rom, addr: u16) -> u8 {
         let addr = addr & 0x3FFF; // Mirror down to 14-bit address space
 
         match addr {
             0x0000..=0x1FFF => {
                 // CHR ROM/RAM
-                self.rom.borrow().read_chr(addr)
+                rom.read_chr(addr)
             }
             0x2000..=0x2FFF => {
                 // Nametables (with mirroring)
-                let mirrored_addr = self.mirror_vram_addr(addr);
+                let mirrored_addr = self.mirror_vram_addr(addr, rom.mirroring());
                 self.vram[mirrored_addr as usize]
             }
             0x3000..=0x3EFF => {
                 // Mirror of 0x2000-0x2EFF
-                let mirrored_addr = self.mirror_vram_addr(addr - 0x1000);
+                let mirrored_addr = self.mirror_vram_addr(addr - 0x1000, rom.mirroring());
                 self.vram[mirrored_addr as usize]
             }
             0x3F00..=0x3FFF => {
@@ -419,20 +415,20 @@ impl PPU {
         }
     }
 
-    fn write_vram(&mut self, addr: u16, val: u8) {
+    fn write_vram(&mut self, rom: &mut Rom, addr: u16, val: u8) {
         let addr = addr & 0x3FFF;
 
         match addr {
             0x0000..=0x1FFF => {
                 // CHR ROM/RAM
-                self.rom.borrow_mut().write_chr(addr, val);
+                rom.write_chr(addr, val);
             }
             0x2000..=0x2FFF => {
-                let mirrored_addr = self.mirror_vram_addr(addr);
+                let mirrored_addr = self.mirror_vram_addr(addr, rom.mirroring());
                 self.vram[mirrored_addr as usize] = val;
             }
             0x3000..=0x3EFF => {
-                let mirrored_addr = self.mirror_vram_addr(addr - 0x1000);
+                let mirrored_addr = self.mirror_vram_addr(addr - 0x1000, rom.mirroring());
                 self.vram[mirrored_addr as usize] = val;
             }
 
@@ -447,8 +443,7 @@ impl PPU {
         }
     }
 
-    fn mirror_vram_addr(&self, addr: u16) -> u16 {
-        let mirroring = self.rom.borrow().mirroring();
+    fn mirror_vram_addr(&self, addr: u16, mirroring: Mirroring) -> u16 {
         let vram_index = (addr & 0x2FFF) - 0x2000; // 0x2000-0x2FFF -> 0x0000-0x0FFF
         let nametable = vram_index / 0x0400; // Which nametable (0-3)
 
@@ -471,9 +466,5 @@ impl PPU {
 
     pub fn get_current_vram_addr(&self) -> u16 {
         self.internal.get_v()
-    }
-
-    pub fn mirroring(&self) -> Mirroring {
-        self.rom.borrow().mirroring()
     }
 }

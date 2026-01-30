@@ -44,7 +44,7 @@ fn main() {
     let desired_spec = AudioSpecDesired {
         freq: Some(44100),
         channels: Some(1),
-        samples: Some(1024),
+        samples: Some(512),
     };
     let audio_device: AudioQueue<f32> = sdl_context
         .audio()
@@ -54,7 +54,7 @@ fn main() {
     audio_device.resume();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("zelda.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("crystalis.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
     let mut next_frame_target = Instant::now();
@@ -98,9 +98,9 @@ fn main() {
             apu.sample_buffer.clear();
             next_frame_target += FRAME_DURATION;
 
-            let max_queue_size = 44100 * 4 / 20;
+            let max_queue_size = 44100 * 16 / 20;
             while audio_device.size() > max_queue_size {
-                std::thread::sleep(Duration::from_nanos(1000));
+                std::thread::sleep(Duration::from_micros(100));
             }
 
             let now = Instant::now();

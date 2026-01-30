@@ -212,7 +212,7 @@ impl Rom {
                     state.irq_counter = state.irq_latch;
                     state.irq_reload = false;
                 } else {
-                    state.irq_counter = state.irq_counter.wrapping_sub(1);
+                    state.irq_counter -= 1;
                 }
 
                 if state.irq_counter == 0 && state.irq_enabled {
@@ -340,6 +340,7 @@ impl Rom {
                 }
                 0xC001 => {
                     state.irq_reload = true;
+                    state.irq_counter = 0;
                 }
                 0xE000 => {
                     state.irq_enabled = false;

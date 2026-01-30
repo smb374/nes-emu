@@ -1,5 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     Mem,
     apu::{APU, TimedChannel},
@@ -44,7 +42,7 @@ const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 #[allow(unused)]
 pub struct Bus<'call> {
     vram: [u8; 0x800],
-    rom: Rc<RefCell<Rom>>,
+    rom: Rom,
     ppu: PPU,
     apu: APU,
 
@@ -59,9 +57,8 @@ impl<'call> Bus<'call> {
     where
         F: FnMut(&PPU, &mut APU, &mut Joypad) + 'call,
     {
-        let rom = Rc::new(RefCell::new(rom));
-        let ppu = PPU::new(Rc::clone(&rom));
-        let apu = APU::new(Rc::clone(&rom));
+        let ppu = PPU::new();
+        let apu = APU::new();
         Self {
             vram: [0u8; 0x800],
             rom,
@@ -78,16 +75,16 @@ impl<'call> Bus<'call> {
     pub fn tick(&mut self, cycles: u16) -> bool {
         self.cycles += cycles as usize;
 
-        self.apu.tick(cycles);
+        self.apu.tick(&mut self.rom, cycles);
         let nmi_before = self.ppu.nmi_interrupt.is_some();
-        self.ppu.tick(3 * cycles);
+        self.ppu.tick(&mut self.rom, 3 * cycles);
         let nmi_after = self.ppu.nmi_interrupt.is_some();
         if !nmi_before && nmi_after {
             (self.cb)(&self.ppu, &mut self.apu, &mut self.joypad1);
         }
 
-        let mapper_irq = self.rom.borrow().irq_sig;
-        self.rom.borrow_mut().irq_sig = false;
+        let mapper_irq = self.rom.irq_sig;
+        self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
         self.apu.irq_sig = false;
         mapper_irq || apu_irq
@@ -112,7 +109,7 @@ impl<'call> Mem for Bus<'call> {
             0x2001 => self.ppu.read_mask(), // Ice Climber reads this.
             0x2002 => self.ppu.read_status(),
             0x2004 => self.ppu.read_oam_data(),
-            0x2007 => self.ppu.read_data(),
+            0x2007 => self.ppu.read_data(&mut self.rom),
 
             0x4000..=0x4014 => {
                 // Open Bus
@@ -128,7 +125,7 @@ impl<'call> Mem for Bus<'call> {
                 let mirror_down_addr = addr & 0x2007;
                 self.read_u8(mirror_down_addr)
             }
-            0x6000..=0xFFFF => self.rom.borrow_mut().read_prg(addr),
+            0x6000..=0xFFFF => self.rom.read_prg(addr),
 
             _ => {
                 // eprintln!("Ignoring mem access at {}", addr);
@@ -166,7 +163,7 @@ impl<'call> Mem for Bus<'call> {
                 self.ppu.write_to_ppu_addr(data);
             }
             0x2007 => {
-                self.ppu.write_data(data);
+                self.ppu.write_data(&mut self.rom, data);
             }
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
@@ -216,7 +213,7 @@ impl<'call> Mem for Bus<'call> {
 
             0x4017 => self.apu.write_frame_counter(data),
 
-            0x6000..=0xFFFF => self.rom.borrow_mut().write_prg(addr, data),
+            0x6000..=0xFFFF => self.rom.write_prg(addr, data),
 
             _ => {
                 // eprintln!("Ignoring mem write-access at {}", addr);

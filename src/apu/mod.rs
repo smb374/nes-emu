@@ -2,8 +2,6 @@ mod channel;
 pub mod registers;
 mod units;
 
-use std::{cell::RefCell, ops::DerefMut, rc::Rc};
-
 pub use channel::TimedChannel;
 
 use crate::cartridge::Rom;
@@ -34,11 +32,10 @@ pub struct APU {
 
     sample_accumulator: f64,
     pub sample_buffer: Vec<f32>,
-    rom: Rc<RefCell<Rom>>,
 }
 
 impl APU {
-    pub fn new(rom: Rc<RefCell<Rom>>) -> Self {
+    pub fn new() -> Self {
         Self {
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
@@ -55,11 +52,10 @@ impl APU {
             frame_cycle: 0,
             sample_accumulator: 0.0,
             sample_buffer: Vec::with_capacity(48000),
-            rom,
         }
     }
 
-    pub fn tick(&mut self, cycles: u16) {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) {
         let cycles = cycles as usize;
         self.cycles += cycles;
 
@@ -68,8 +64,7 @@ impl APU {
         self.cycle_accumulator = total_cycles % 2;
 
         self.triag.clock_timer(cycles);
-        self.dmc
-            .clock_timer(cycles, self.rom.borrow_mut().deref_mut());
+        self.dmc.clock_timer(cycles, rom);
 
         if apu_ticks > 0 {
             self.pulse1.clock_timer(apu_ticks);
