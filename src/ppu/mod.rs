@@ -234,8 +234,6 @@ impl PPU {
         if self.cycles >= 341 {
             // Handle end-of-scanline operations for visible scanlines
             if self.scanline < 240 {
-                // Render the completed scanline
-                self.render_scanline();
                 if self.mask.show_background() || self.mask.show_sprites() {
                     // Increment X 32 times (once per tile)
                     for _ in 0..32 {
@@ -245,9 +243,6 @@ impl PPU {
                     self.internal.increment_y();
                     // Copy horizontal scroll from t to v
                     self.internal.copy_horizontal();
-                }
-
-                if self.mask.show_background() || self.mask.show_sprites() {
                     let bg_table = self.ctrl.bknd_pattern_addr(); // 0x0000 or 0x1000
                     let spr_table = self.ctrl.sprt_pattern_addr(); // 0x0000 or 0x1000
 
@@ -256,6 +251,8 @@ impl PPU {
                         self.rom.borrow_mut().ppu_tick(0x1000); // Simulate Sprite fetch (High)
                     }
                 }
+                // Render the completed scanline
+                self.render_scanline();
             }
             // Pre-render scanline (261) - copy vertical scroll
             if self.scanline == 261 {
