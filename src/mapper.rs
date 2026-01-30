@@ -56,29 +56,48 @@ impl MMC1State {
         }
     }
 
-    pub fn map_pages(&mut self, prg_pages: u8) {
+    pub fn map_pages(&mut self, prg_pages: u8, chr_pages: u8) {
+        // SUROM/SXROM: Bit 4 of CHR Bank 0 (at $A000) selects a 256KB outer bank
+        // This applies if the PRG-ROM is 512KB (32 pages)
+        let outer_bank = if prg_pages == 32 {
+            (self.chr_bank_0 >> 4) & 1
+        } else {
+            0
+        };
+        let page_offset = outer_bank * 16; // Each outer bank is 16 pages (256KB)
+
+        // Standard PRG-ROM Banking Logic with Outer Bank offset
         match self.prg_mode() {
             0 | 1 => {
-                let page = (self.prg_bank >> 1) & 0x0F;
-                self.prg_map = [page, page + 1];
+                let page = self.prg_bank & 0x0E;
+                self.prg_map = [page_offset + page, page_offset + page + 1];
             }
             2 => {
                 let page = self.prg_bank & 0x0F;
-                self.prg_map = [0, page];
+                self.prg_map = [page_offset, page_offset + page];
             }
             3 => {
                 let page = self.prg_bank & 0x0F;
-                self.prg_map = [page, prg_pages - 1];
+                // Fixed to the last bank of the current 256KB outer bank
+                self.prg_map = [page_offset + page, prg_pages - 1];
             }
             _ => unreachable!(),
         }
+
+        // CHR Banking
         if self.chr_mode() {
-            let page0 = self.chr_bank_0 & 0x1F;
-            let page1 = self.chr_bank_1 & 0x1F;
-            self.chr_map = [page0, page1];
+            if chr_pages == 0 {
+                self.chr_map = [self.chr_bank_0 & 0x1, self.chr_bank_1 & 0x1];
+            } else {
+                self.chr_map = [self.chr_bank_0 & 0x1F, self.chr_bank_1 & 0x1F];
+            }
         } else {
-            let page = (self.chr_bank_0 >> 1) & 0x0F;
-            self.chr_map = [page * 2, page * 2 + 1];
+            if chr_pages == 0 {
+                self.chr_map = [0, 1];
+            } else {
+                let page = self.chr_bank_0 & 0x0E;
+                self.chr_map = [page, page + 1];
+            }
         }
     }
 

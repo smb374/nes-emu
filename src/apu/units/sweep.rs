@@ -25,7 +25,7 @@ impl Sweep {
     ) -> (u16, bool) {
         let delta = timer >> shamt;
         let target = if negate {
-            let neg_delta = (!delta).wrapping_add(if self.use_2c { 1 } else { 0 });
+            let neg_delta = (!delta).wrapping_add(if self.use_2c { 0 } else { 1 });
             timer.wrapping_add(neg_delta)
         } else {
             timer.wrapping_add(delta)

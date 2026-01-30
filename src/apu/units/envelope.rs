@@ -28,10 +28,10 @@ impl Envelope {
 
         if self.divider == 0 {
             self.divider = load_volume;
-            if self.decay_level == 0 && loop_flag {
-                self.decay_level = 15;
-            } else {
+            if self.decay_level != 0 {
                 self.decay_level -= 1;
+            } else if loop_flag {
+                self.decay_level = 15;
             }
         }
 

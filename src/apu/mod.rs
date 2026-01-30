@@ -70,12 +70,12 @@ impl APU {
         self.cycle_accumulator = total_cycles % 2;
 
         self.triag.clock_timer(cycles);
+        self.dmc.clock_timer(cycles, rom);
 
         if apu_ticks > 0 {
             self.pulse1.clock_timer(apu_ticks);
             self.pulse2.clock_timer(apu_ticks);
             self.noise.clock_timer(apu_ticks);
-            self.dmc.clock_timer(apu_ticks, rom);
 
             let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
             self.frame_cycle += apu_ticks;
@@ -199,6 +199,7 @@ impl APU {
 
     pub fn write_status(&mut self, val: u8) {
         self.status.update(val);
+        self.status.remove(APUStatus::DMC_INTERRUPT);
         self.dmc.clear_interrupt();
         // If bit is 0, length counter must be cleared immediately
         if !self.status.contains(APUStatus::PULSE_CHANNEL1) {
@@ -254,11 +255,6 @@ impl APU {
         let triangle_out = self.triag.output();
         let noise_out = self.noise.output();
         let dmc_out = self.dmc.output();
-
-        // eprintln!(
-        //     "CYC:{} p1={} p2={} t={} n={} dmc={}",
-        //     self.cycles, pulse1_out, pulse2_out, triangle_out, noise_out, dmc_out,
-        // );
 
         let pulse_sum = pulse1_out + pulse2_out;
         let pulse_out = if pulse_sum == 0 {

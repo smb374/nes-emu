@@ -120,18 +120,18 @@ impl Rom {
             // PRG-RAM
             0x6000..=0x7FFF => {
                 if let Some(ref ram) = self.prg_ram {
-                    match self.mapper {
-                        MapperType::MMC3(ref state) => {
-                            if state.prg_ram_enable {
-                                ram[(addr - 0x6000) as usize]
-                            } else {
-                                0
+                    if let MapperType::MMC1(ref state) = self.mapper {
+                        // SNROM check: 8KB CHR-RAM and <= 256KB PRG-ROM
+                        if self.header.chr_pages == 0 && self.header.prg_pages <= 16 {
+                            let ram_disabled = (state.chr_bank_0 & 0x10) != 0; // Bit 4 is "E" bit
+                            if ram_disabled {
+                                return 0; // Open bus
                             }
                         }
-                        _ => ram[(addr - 0x6000) as usize],
                     }
+                    ram[(addr - 0x6000) as usize]
                 } else {
-                    0 // Open bus
+                    0
                 }
             }
             // PRG-ROM
@@ -250,6 +250,11 @@ impl Rom {
                 self.prg_rom[(addr - 0x8000) as usize]
             }
             MapperType::MMC1(ref state) => {
+                // SEROM/SHROM: 32KB PRG-ROM is hardwired and unbanked
+                if self.header.prg_pages <= 2 {
+                    return self.prg_rom[(addr - 0x8000) as usize];
+                }
+                // Standard MMC1 banking for larger games
                 let idx = (addr >> 14) & 0x1;
                 let offset = addr - (addr & 0xC000);
                 let page = state.prg_map[idx as usize];
@@ -286,6 +291,7 @@ impl Rom {
                     state.shift_register = 0;
                     state.shift_count = 0;
                     state.control |= 0x0C; // Lock PRG to mode 3
+                    state.map_pages(self.header.prg_pages, self.header.chr_pages);
                     return;
                 }
 
@@ -304,7 +310,7 @@ impl Rom {
                         3 => state.prg_bank = state.shift_register,
                         _ => unreachable!(),
                     }
-                    state.map_pages(self.header.prg_pages);
+                    state.map_pages(self.header.prg_pages, self.header.chr_pages);
                     state.shift_register = 0;
                     state.shift_count = 0;
                 }
