@@ -11,7 +11,6 @@ struct NesHeader {
     mapper: u8,
     is_hor_arr: bool,
     is_alt_arr: bool,
-    has_prg_ram: bool,
     has_trainer: bool,
     is_nes2: bool,
 }
@@ -40,7 +39,6 @@ impl Rom {
         header.is_alt_arr = raw[6] & 0b1000 != 0;
         header.prg_pages = raw[4];
         header.chr_pages = raw[5];
-        header.has_prg_ram = raw[6] & 0b0010 != 0;
         header.has_trainer = raw[6] & 0b0100 != 0;
 
         // Hardware mirroring from solder pads
@@ -67,16 +65,16 @@ impl Rom {
         let prg_rom_start = if header.has_trainer { 16 + 512 } else { 16 };
         let chr_rom_start = prg_rom_start + prg_rom_size;
 
-        // Initialize mapper state - PRG-RAM is now managed by the mapper
+        // Initialize mapper state - PRG-RAM is determined by hardware, not iNES header
         let mapper = match header.mapper {
-            0 => MapperType::NROM(NROMState::new(header.has_prg_ram)),
-            1 | 155 => MapperType::MMC1(MMC1State::new(
+            0 => MapperType::NROM(NROMState::new()),
+            1 => MapperType::MMC1(MMC1State::new(
                 header.mapper,
                 header.prg_pages,
                 header.chr_pages,
             )),
-            2 => MapperType::UxROM(UxROMState::new(header.has_prg_ram)),
-            3 => MapperType::CNROM(CNROMState::new(header.has_prg_ram)),
+            2 => MapperType::UxROM(UxROMState::new()),
+            3 => MapperType::CNROM(CNROMState::new()),
             4 => MapperType::MMC3(MMC3State::new(
                 header.prg_pages,
                 header.chr_pages,

@@ -25,73 +25,57 @@ impl MapperType {
         }
     }
 
-    /// Read from PRG-RAM ($6000-$7FFF)
     pub fn read_prg_ram(&self, addr: u16) -> u8 {
         match self {
             MapperType::NROM(state) => state.read_prg_ram(addr),
             MapperType::MMC1(state) => state.read_prg_ram(addr),
-            MapperType::UxROM(state) => state.read_prg_ram(addr),
-            MapperType::CNROM(state) => state.read_prg_ram(addr),
+            MapperType::UxROM(_) | MapperType::CNROM(_) => 0,
             MapperType::MMC3(state) => state.read_prg_ram(addr),
         }
     }
 
-    /// Write to PRG-RAM ($6000-$7FFF)
     pub fn write_prg_ram(&mut self, addr: u16, val: u8) {
         match self {
             MapperType::NROM(state) => state.write_prg_ram(addr, val),
             MapperType::MMC1(state) => state.write_prg_ram(addr, val),
-            MapperType::UxROM(state) => state.write_prg_ram(addr, val),
-            MapperType::CNROM(state) => state.write_prg_ram(addr, val),
+            MapperType::UxROM(_) | MapperType::CNROM(_) => {}
             MapperType::MMC3(state) => state.write_prg_ram(addr, val),
         }
     }
 
-    /// Check if this mapper has PRG-RAM
     pub fn has_prg_ram(&self) -> bool {
         match self {
-            MapperType::NROM(state) => state.prg_ram.is_some(),
-            MapperType::MMC1(_) => true, // MMC1 always has RAM
-            MapperType::UxROM(state) => state.prg_ram.is_some(),
-            MapperType::CNROM(state) => state.prg_ram.is_some(),
-            MapperType::MMC3(_) => true, // MMC3 always has RAM
+            MapperType::UxROM(_) | MapperType::CNROM(_) => false,
+            _ => true,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NROMState {
-    pub prg_ram: Option<Box<[u8]>>,
+    pub prg_ram: Box<[u8]>,
 }
 
 impl NROMState {
-    pub fn new(has_prg_ram: bool) -> Self {
+    pub fn new() -> Self {
         Self {
-            prg_ram: if has_prg_ram {
-                Some(vec![0u8; PRG_RAM_8K].into_boxed_slice())
-            } else {
-                None
-            },
+            prg_ram: vec![0u8; PRG_RAM_8K].into_boxed_slice(),
         }
     }
 
     fn read_prg_ram(&self, addr: u16) -> u8 {
-        self.prg_ram
-            .as_ref()
-            .map(|ram| ram[(addr - 0x6000) as usize % ram.len()])
-            .unwrap_or(0)
+        self.prg_ram[(addr - 0x6000) as usize % self.prg_ram.len()]
     }
 
     fn write_prg_ram(&mut self, addr: u16, val: u8) {
-        if let Some(ref mut ram) = self.prg_ram {
-            ram[(addr - 0x6000) as usize % ram.len()] = val;
-        }
+        let idx = (addr - 0x6000) as usize % self.prg_ram.len();
+        self.prg_ram[idx] = val;
     }
 }
 
 impl Default for NROMState {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
@@ -295,76 +279,34 @@ impl MMC1State {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UxROMState {
     pub prg_bank: u8,
-    pub prg_ram: Option<Box<[u8]>>,
 }
 
 impl UxROMState {
-    pub fn new(has_prg_ram: bool) -> Self {
-        Self {
-            prg_bank: 0,
-            prg_ram: if has_prg_ram {
-                Some(vec![0u8; PRG_RAM_8K].into_boxed_slice())
-            } else {
-                None
-            },
-        }
-    }
-
-    fn read_prg_ram(&self, addr: u16) -> u8 {
-        self.prg_ram
-            .as_ref()
-            .map(|ram| ram[(addr - 0x6000) as usize])
-            .unwrap_or(0)
-    }
-
-    fn write_prg_ram(&mut self, addr: u16, val: u8) {
-        if let Some(ref mut ram) = self.prg_ram {
-            ram[(addr - 0x6000) as usize] = val;
-        }
+    pub fn new() -> Self {
+        Self { prg_bank: 0 }
     }
 }
 
 impl Default for UxROMState {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CNROMState {
     pub chr_bank: u8,
-    pub prg_ram: Option<Box<[u8]>>,
 }
 
 impl CNROMState {
-    pub fn new(has_prg_ram: bool) -> Self {
-        Self {
-            chr_bank: 0,
-            prg_ram: if has_prg_ram {
-                Some(vec![0u8; PRG_RAM_8K].into_boxed_slice())
-            } else {
-                None
-            },
-        }
-    }
-
-    fn read_prg_ram(&self, addr: u16) -> u8 {
-        self.prg_ram
-            .as_ref()
-            .map(|ram| ram[(addr - 0x6000) as usize])
-            .unwrap_or(0)
-    }
-
-    fn write_prg_ram(&mut self, addr: u16, val: u8) {
-        if let Some(ref mut ram) = self.prg_ram {
-            ram[(addr - 0x6000) as usize] = val;
-        }
+    pub fn new() -> Self {
+        Self { chr_bank: 0 }
     }
 }
 
 impl Default for CNROMState {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
