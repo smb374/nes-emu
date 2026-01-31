@@ -49,6 +49,38 @@ impl MapperType {
             _ => true,
         }
     }
+
+    pub fn get_prg_ram_data(&self) -> &[u8] {
+        match self {
+            MapperType::NROM(state) => &state.prg_ram,
+            MapperType::MMC1(state) => &state.prg_ram,
+            MapperType::MMC3(state) => &state.prg_ram,
+            MapperType::UxROM(_) | MapperType::CNROM(_) => &[],
+        }
+    }
+
+    pub fn load_prg_ram_data(&mut self, data: &[u8]) -> Result<(), String> {
+        match self {
+            MapperType::NROM(state) => {
+                let len = data.len().min(state.prg_ram.len());
+                state.prg_ram[..len].copy_from_slice(&data[..len]);
+                Ok(())
+            }
+            MapperType::MMC1(state) => {
+                let len = data.len().min(state.prg_ram.len());
+                state.prg_ram[..len].copy_from_slice(&data[..len]);
+                Ok(())
+            }
+            MapperType::MMC3(state) => {
+                let len = data.len().min(state.prg_ram.len());
+                state.prg_ram[..len].copy_from_slice(&data[..len]);
+                Ok(())
+            }
+            MapperType::UxROM(_) | MapperType::CNROM(_) => {
+                Err("Mapper does not have PRG-RAM".to_string())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

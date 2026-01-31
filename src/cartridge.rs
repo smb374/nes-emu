@@ -1,4 +1,5 @@
 use crate::mapper::*;
+use std::path::PathBuf;
 
 const NES_TAG: [u8; 4] = [0x4E, 0x45, 0x53, 0x1A];
 pub const PRG_ROM_PAGE_SIZE: usize = 0x4000; // 16KB
@@ -23,10 +24,11 @@ pub struct Rom {
     pub trainer: Option<[u8; 512]>,
     pub irq_sig: bool,
     header: NesHeader,
+    rom_path: PathBuf,
 }
 
 impl Rom {
-    pub fn new(raw: &[u8]) -> Result<Rom, String> {
+    pub fn new(raw: &[u8], path: PathBuf) -> Result<Rom, String> {
         if &raw[0..4] != NES_TAG {
             return Err("File is not in iNES file format".to_string());
         }
@@ -105,7 +107,55 @@ impl Rom {
             trainer,
             header,
             irq_sig: false,
+            rom_path: path,
         })
+    }
+
+    fn save_file_path(&self) -> PathBuf {
+        let mut save_path = self.rom_path.with_extension("");
+        let extension = save_path
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or("");
+        let new_extension = if extension.is_empty() {
+            "sav".to_string()
+        } else {
+            format!("{}.sav", extension)
+        };
+        save_path.set_extension(new_extension);
+        save_path
+    }
+
+    pub fn save_prg_ram(&self) -> Result<(), String> {
+        if !self.mapper.has_prg_ram() {
+            return Ok(()); // No PRG-RAM to save
+        }
+
+        let prg_ram_data = self.mapper.get_prg_ram_data();
+        std::fs::write(&self.save_file_path(), prg_ram_data)
+            .map_err(|e| format!("Failed to write save file: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn load_prg_ram(&mut self) -> Result<(), String> {
+        if !self.mapper.has_prg_ram() {
+            return Ok(()); // No PRG-RAM to load
+        }
+
+        let save_path = self.save_file_path();
+
+        if !save_path.exists() {
+            return Ok(()); // No save file exists yet
+        }
+
+        let save_data =
+            std::fs::read(&save_path).map_err(|e| format!("Failed to read save file: {}", e))?;
+
+        self.mapper.load_prg_ram_data(&save_data)?;
+
+        Ok(())
     }
 
     pub fn read_prg(&mut self, addr: u16) -> u8 {
@@ -360,7 +410,7 @@ pub mod test {
             chr_rom: vec![2; 1 * CHR_ROM_PAGE_SIZE],
         });
 
-        Rom::new(&test_rom).unwrap()
+        Rom::new(&test_rom, "".into()).unwrap()
     }
 
     #[test]
@@ -374,7 +424,7 @@ pub mod test {
             chr_rom: vec![2; 1 * CHR_ROM_PAGE_SIZE],
         });
 
-        let rom = Rom::new(&test_rom).unwrap();
+        let rom = Rom::new(&test_rom, "".into()).unwrap();
 
         assert_eq!(rom.chr_data.len(), CHR_ROM_PAGE_SIZE);
         assert_eq!(rom.prg_rom.len(), 2 * PRG_ROM_PAGE_SIZE);
@@ -393,7 +443,7 @@ pub mod test {
             chr_rom: vec![], // No CHR-ROM = CHR-RAM
         });
 
-        let rom = Rom::new(&test_rom).unwrap();
+        let rom = Rom::new(&test_rom, "".into()).unwrap();
 
         assert_eq!(rom.chr_data.len(), CHR_ROM_PAGE_SIZE); // 8KB CHR-RAM
         assert!(matches!(rom.mapper, MapperType::UxROM(_)));
@@ -410,7 +460,7 @@ pub mod test {
             chr_rom: vec![],
         });
 
-        let rom = Rom::new(&test_rom).unwrap();
+        let rom = Rom::new(&test_rom, "".into()).unwrap();
         assert!(rom.mapper.has_prg_ram());
     }
 }

@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use clap::Parser;
 use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
 use sdl2::{
     audio::{AudioQueue, AudioSpecDesired},
@@ -20,7 +21,17 @@ const OVERSCAN_BOTTOM: usize = 16;
 const VISIBLE_WIDTH: usize = 256 - OVERSCAN_LEFT - OVERSCAN_RIGHT; // 248
 const VISIBLE_HEIGHT: usize = 240 - OVERSCAN_TOP - OVERSCAN_BOTTOM; // 224
 
+#[derive(Parser, Debug)]
+#[command(name = "NES Emulator")]
+#[command(about = "A Nintendo Entertainment System emulator", long_about = None)]
+struct Args {
+    /// Path to the ROM file to load
+    #[arg(value_name = "ROM")]
+    rom_path: String,
+}
+
 fn main() {
+    let args = Args::parse();
     let mut key_map = HashMap::new();
     key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
     key_map.insert(Keycode::Up, joypad::JoypadButton::UP);
@@ -70,8 +81,14 @@ fn main() {
     audio_device.resume();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("zelda.nes").unwrap();
-    let rom = Rom::new(&bytes).unwrap();
+    let path = std::path::absolute(&args.rom_path).expect("Failed to get absolute path");
+    let bytes: Vec<u8> = std::fs::read(&path).expect("Failed to load ROM");
+    let mut rom = Rom::new(&bytes, path).unwrap();
+
+    // Load save file if it exists
+    if let Err(e) = rom.load_prg_ram() {
+        eprintln!("Warning: Failed to load save file: {}", e);
+    }
 
     let mut next_frame_target = Instant::now();
 
@@ -141,4 +158,9 @@ fn main() {
     cpu.run_with_cb(|_cpu| {
         // println!("{}", nes_emu::trace::trace(_cpu));
     });
+
+    // Save PRG-RAM on exit
+    if let Err(e) = cpu.save_prg_ram() {
+        eprintln!("Warning: Failed to save PRG-RAM: {}", e);
+    }
 }

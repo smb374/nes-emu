@@ -101,6 +101,10 @@ impl<'call> Bus<'call> {
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
         self.ppu.nmi_interrupt.take()
     }
+
+    pub fn save_prg_ram(&self) -> Result<(), String> {
+        self.rom.save_prg_ram()
+    }
 }
 
 impl<'call> Mem for Bus<'call> {

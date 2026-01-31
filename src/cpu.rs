@@ -88,6 +88,10 @@ impl<'a> CPU<'a> {
         self.pc = self.read_u16(0xFFFC);
     }
 
+    pub fn save_prg_ram(&self) -> Result<(), String> {
+        self.bus.save_prg_ram()
+    }
+
     pub fn run(&mut self) {
         self.run_with_cb(|_| {});
     }
