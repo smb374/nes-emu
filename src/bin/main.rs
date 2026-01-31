@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nes_emu::{apu::APU, bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
+use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
 use sdl2::{
     audio::{AudioQueue, AudioSpecDesired},
     event::Event,
@@ -54,7 +54,7 @@ fn main() {
     audio_device.resume();
 
     //load the game
-    let bytes: Vec<u8> = std::fs::read("smb3.nes").unwrap();
+    let bytes: Vec<u8> = std::fs::read("zelda.nes").unwrap();
     let rom = Rom::new(&bytes).unwrap();
 
     let mut next_frame_target = Instant::now();
@@ -62,7 +62,8 @@ fn main() {
     // run the game cycle
     let bus = Bus::new(
         rom,
-        move |ppu: &PPU, apu: &mut APU, joypad: &mut joypad::Joypad| {
+        audio_device,
+        move |ppu: &PPU, joypad: &mut joypad::Joypad| {
             // Copy the frame buffer from PPU to texture
             texture
                 .update(None, &ppu.frame_buffer[..], 256 * 3)
@@ -79,7 +80,7 @@ fn main() {
                         ..
                     } => {
                         sdl2::mixer::close_audio();
-                        std::process::exit(0);
+                        return true;
                     }
                     Event::KeyDown { keycode, .. } => {
                         if let Some(&key) = key_map.get(&keycode.unwrap_or(Keycode::Ampersand)) {
@@ -94,14 +95,7 @@ fn main() {
                     _ => { /* do nothing */ }
                 }
             }
-            audio_device.queue_audio(&apu.sample_buffer[..]).unwrap();
-            apu.sample_buffer.clear();
             next_frame_target += FRAME_DURATION;
-
-            let max_queue_size = 44100 * 16 / 20;
-            while audio_device.size() > max_queue_size {
-                std::thread::sleep(Duration::from_micros(100));
-            }
 
             let now = Instant::now();
 
@@ -112,6 +106,7 @@ fn main() {
                     next_frame_target = now;
                 }
             }
+            false
         },
     );
 

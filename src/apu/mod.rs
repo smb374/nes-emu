@@ -2,7 +2,10 @@ mod channel;
 pub mod registers;
 mod units;
 
+use std::time::Duration;
+
 pub use channel::TimedChannel;
+use sdl2::audio::AudioQueue;
 
 use crate::{apu::units::filter::Filter, cartridge::Rom};
 
@@ -31,14 +34,15 @@ pub struct APU {
     cycle_accumulator: usize,
 
     sample_accumulator: f64,
-    pub sample_buffer: Vec<f32>,
     hpf90: Filter<44100>,
     hpf442: Filter<44100>,
     lpf14k: Filter<44100>,
+
+    audio_queue: AudioQueue<f32>,
 }
 
 impl APU {
-    pub fn new() -> Self {
+    pub fn new(audio_queue: AudioQueue<f32>) -> Self {
         Self {
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
@@ -54,10 +58,10 @@ impl APU {
             cycle_accumulator: 0,
             frame_cycle: 0,
             sample_accumulator: 0.0,
-            sample_buffer: Vec::with_capacity(48000),
             hpf90: Filter::new(90.0, true),
             hpf442: Filter::new(442.0, true),
             lpf14k: Filter::new(14000.0, false),
+            audio_queue,
         }
     }
 
@@ -161,9 +165,20 @@ impl APU {
         self.sample_accumulator += cycles as f64 * SAMPLE_RATE / CPU_FREQ;
         let samples_to_generate = self.sample_accumulator as usize;
 
-        for _ in 0..samples_to_generate {
-            let sample = self.mix_channels();
-            self.sample_buffer.push(sample);
+        let mut buf = [0.0; 256];
+
+        for i in (0..samples_to_generate).step_by(256) {
+            let mut top = 0;
+            for j in 0..256.min(samples_to_generate - i) {
+                buf[j] = self.mix_channels();
+                top += 1;
+            }
+            let _ = self.audio_queue.queue_audio(&buf[..top]);
+        }
+
+        let max_queue_size = 44100 * 8 / 20;
+        while self.audio_queue.size() > max_queue_size {
+            std::thread::sleep(Duration::from_micros(1));
         }
 
         self.sample_accumulator -= samples_to_generate as f64;

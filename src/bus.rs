@@ -1,3 +1,5 @@
+use sdl2::audio::AudioQueue;
+
 use crate::{
     Mem,
     apu::{APU, TimedChannel},
@@ -49,16 +51,16 @@ pub struct Bus<'call> {
     cycles: usize,
     joypad1: Joypad,
     joypad2: Joypad,
-    cb: Box<dyn FnMut(&PPU, &mut APU, &mut Joypad) + 'call>,
+    cb: Box<dyn FnMut(&PPU, &mut Joypad) -> bool + 'call>,
 }
 
 impl<'call> Bus<'call> {
-    pub fn new<F>(rom: Rom, f: F) -> Self
+    pub fn new<F>(rom: Rom, audio_queue: AudioQueue<f32>, f: F) -> Self
     where
-        F: FnMut(&PPU, &mut APU, &mut Joypad) + 'call,
+        F: FnMut(&PPU, &mut Joypad) -> bool + 'call,
     {
         let ppu = PPU::new();
-        let apu = APU::new();
+        let apu = APU::new(audio_queue);
         Self {
             vram: [0u8; 0x800],
             rom,
@@ -72,22 +74,28 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self, cycles: u8) -> bool {
+    pub fn tick(&mut self, cycles: u8) -> (bool, bool) {
+        let mut exit = false;
         self.cycles += cycles as usize;
 
-        self.apu.tick(&mut self.rom, cycles);
-        let nmi_before = self.ppu.nmi_interrupt.is_some();
-        self.ppu.tick(&mut self.rom, 3 * cycles);
-        let nmi_after = self.ppu.nmi_interrupt.is_some();
-        if !nmi_before && nmi_after {
-            (self.cb)(&self.ppu, &mut self.apu, &mut self.joypad1);
+        for _ in 0..cycles {
+            self.apu.tick(&mut self.rom, 1);
+            let nmi_before = self.ppu.nmi_interrupt.is_some();
+            self.ppu.tick(&mut self.rom, 3);
+            let nmi_after = self.ppu.nmi_interrupt.is_some();
+            if !nmi_before && nmi_after {
+                if (self.cb)(&self.ppu, &mut self.joypad1) {
+                    exit = true;
+                    break;
+                }
+            }
         }
 
         let mapper_irq = self.rom.irq_sig;
         self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
         self.apu.irq_sig = false;
-        mapper_irq || apu_irq
+        (mapper_irq || apu_irq, exit)
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {

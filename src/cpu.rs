@@ -112,7 +112,11 @@ impl<'a> CPU<'a> {
             if let Some(op) = OPS[opcode as usize] {
                 self.run_op(op);
                 self.cycles += op.cycles as usize;
-                self.irq_sig = self.irq_sig || self.bus.tick(op.cycles);
+                let (irq_sig, exit) = self.bus.tick(op.cycles);
+                if exit {
+                    break;
+                }
+                self.irq_sig = self.irq_sig || irq_sig;
                 if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
                 }
@@ -122,7 +126,7 @@ impl<'a> CPU<'a> {
         }
     }
 
-    fn interrupt_nmi(&mut self) {
+    fn interrupt_nmi(&mut self) -> bool {
         self.push_stack_u16(self.pc);
         let mut flag = self.status.clone();
         flag.set(CpuFlags::BREAK, false);
@@ -132,10 +136,12 @@ impl<'a> CPU<'a> {
         self.status.insert(CpuFlags::INTR_DISABLE);
 
         self.pc = self.read_u16(0xFFFA);
-        self.irq_sig = self.irq_sig || self.bus.tick(7);
+        let (irq_sig, exit) = self.bus.tick(7);
+        self.irq_sig = self.irq_sig || irq_sig;
+        exit
     }
 
-    fn interrupt_irq(&mut self) {
+    fn interrupt_irq(&mut self) -> bool {
         self.push_stack_u16(self.pc);
         let mut flag = self.status.clone();
         flag.set(CpuFlags::BREAK, false);
@@ -145,7 +151,9 @@ impl<'a> CPU<'a> {
         self.status.insert(CpuFlags::INTR_DISABLE);
 
         self.pc = self.read_u16(0xFFFE);
-        self.irq_sig = self.irq_sig || self.bus.tick(7);
+        let (irq_sig, exit) = self.bus.tick(7);
+        self.irq_sig = self.irq_sig || irq_sig;
+        exit
     }
 
     fn push_stack_u16(&mut self, val: u16) {
