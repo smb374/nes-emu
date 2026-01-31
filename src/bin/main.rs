@@ -15,8 +15,8 @@ use sdl2::{
 const FRAME_DURATION: Duration = Duration::from_micros(16639);
 const OVERSCAN_LEFT: usize = 8;
 const OVERSCAN_RIGHT: usize = 0;
-const OVERSCAN_TOP: usize = 0;
-const OVERSCAN_BOTTOM: usize = 16;
+const OVERSCAN_TOP: usize = 8;
+const OVERSCAN_BOTTOM: usize = 8;
 
 const VISIBLE_WIDTH: usize = 256 - OVERSCAN_LEFT - OVERSCAN_RIGHT; // 248
 const VISIBLE_HEIGHT: usize = 240 - OVERSCAN_TOP - OVERSCAN_BOTTOM; // 224
