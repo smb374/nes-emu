@@ -12,6 +12,13 @@ use sdl2::{
 };
 
 const FRAME_DURATION: Duration = Duration::from_micros(16639);
+const OVERSCAN_LEFT: usize = 8;
+const OVERSCAN_RIGHT: usize = 0;
+const OVERSCAN_TOP: usize = 0;
+const OVERSCAN_BOTTOM: usize = 16;
+
+const VISIBLE_WIDTH: usize = 256 - OVERSCAN_LEFT - OVERSCAN_RIGHT; // 248
+const VISIBLE_HEIGHT: usize = 240 - OVERSCAN_TOP - OVERSCAN_BOTTOM; // 224
 
 fn main() {
     let mut key_map = HashMap::new();
@@ -27,7 +34,11 @@ fn main() {
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
-        .window("Tile viewer", (256.0 * 3.0) as u32, (240.0 * 3.0) as u32)
+        .window(
+            "NES Emulator",
+            (VISIBLE_WIDTH * 3) as u32,
+            (VISIBLE_HEIGHT * 3) as u32,
+        )
         .position_centered()
         .build()
         .unwrap();
@@ -38,8 +49,13 @@ fn main() {
 
     let creator = canvas.texture_creator();
     let mut texture = creator
-        .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
+        .create_texture_target(
+            PixelFormatEnum::RGB24,
+            VISIBLE_WIDTH as u32,
+            VISIBLE_HEIGHT as u32,
+        )
         .unwrap();
+    let mut visible_buffer = [0u8; VISIBLE_WIDTH * VISIBLE_HEIGHT * 3];
 
     let desired_spec = AudioSpecDesired {
         freq: Some(44100),
@@ -64,9 +80,18 @@ fn main() {
         rom,
         audio_device,
         move |ppu: &PPU, joypad: &mut joypad::Joypad| {
-            // Copy the frame buffer from PPU to texture
+            // Copy visible region from PPU frame buffer, applying overscan
+            for y in 0..VISIBLE_HEIGHT {
+                let src_y = y + OVERSCAN_TOP;
+                let src_offset = (src_y * 256 + OVERSCAN_LEFT) * 3;
+                let dst_offset = y * VISIBLE_WIDTH * 3;
+
+                visible_buffer[dst_offset..dst_offset + VISIBLE_WIDTH * 3]
+                    .copy_from_slice(&ppu.frame_buffer[src_offset..src_offset + VISIBLE_WIDTH * 3]);
+            }
+
             texture
-                .update(None, &ppu.frame_buffer[..], 256 * 3)
+                .update(None, &visible_buffer[..], VISIBLE_WIDTH * 3)
                 .unwrap();
 
             canvas.copy(&texture, None, None).unwrap();
