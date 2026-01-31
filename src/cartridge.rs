@@ -71,7 +71,11 @@ impl Rom {
         // Initialize mapper state
         let mapper = match header.mapper {
             0 => MapperType::NROM,
-            1 => MapperType::MMC1(MMC1State::new(header.prg_pages)),
+            1 => MapperType::MMC1(MMC1State::new(
+                header.mapper,
+                header.prg_pages,
+                header.chr_pages,
+            )),
             2 => MapperType::UxROM(UxROMState::default()),
             3 => MapperType::CNROM(CNROMState::default()),
             4 => MapperType::MMC3(MMC3State::new(
@@ -89,7 +93,7 @@ impl Rom {
 
         // PRG-RAM allocation (8KB standard)
         let prg_ram = if header.has_prg_ram {
-            Some(vec![0u8; 0x2000].into_boxed_slice())
+            Some(vec![0u8; 0x8000].into_boxed_slice())
         } else {
             None
         };
@@ -120,16 +124,21 @@ impl Rom {
             // PRG-RAM
             0x6000..=0x7FFF => {
                 if let Some(ref ram) = self.prg_ram {
-                    if let MapperType::MMC1(ref state) = self.mapper {
-                        // SNROM check: 8KB CHR-RAM and <= 256KB PRG-ROM
-                        if self.header.chr_pages == 0 && self.header.prg_pages <= 16 {
-                            let ram_disabled = (state.chr_bank_0 & 0x10) != 0; // Bit 4 is "E" bit
-                            if ram_disabled {
-                                return 0; // Open bus
+                    match self.mapper {
+                        MapperType::MMC3(ref state) => {
+                            if state.prg_ram_enable {
+                                ram[(addr - 0x6000) as usize]
+                            } else {
+                                0
                             }
                         }
+                        MapperType::MMC1(ref state) => {
+                            let bank = state.get_prg_ram_bank();
+                            let offset = addr - (addr & 0xE000);
+                            ram[bank as usize * 0x2000 + offset as usize]
+                        }
+                        _ => ram[(addr - 0x6000) as usize],
                     }
-                    ram[(addr - 0x6000) as usize]
                 } else {
                     0
                 }
@@ -150,6 +159,11 @@ impl Rom {
                             if state.prg_ram_enable {
                                 ram[(addr - 0x6000) as usize] = val;
                             }
+                        }
+                        MapperType::MMC1(ref state) => {
+                            let bank = state.get_prg_ram_bank();
+                            let offset = addr - (addr & 0xE000);
+                            ram[bank as usize * 0x2000 + offset as usize] = val;
                         }
                         _ => ram[(addr - 0x6000) as usize] = val,
                     }
@@ -250,11 +264,6 @@ impl Rom {
                 self.prg_rom[(addr - 0x8000) as usize]
             }
             MapperType::MMC1(ref state) => {
-                // SEROM/SHROM: 32KB PRG-ROM is hardwired and unbanked
-                if self.header.prg_pages <= 2 {
-                    return self.prg_rom[(addr - 0x8000) as usize];
-                }
-                // Standard MMC1 banking for larger games
                 let idx = (addr >> 14) & 0x1;
                 let offset = addr - (addr & 0xC000);
                 let page = state.prg_map[idx as usize];
@@ -291,7 +300,7 @@ impl Rom {
                     state.shift_register = 0;
                     state.shift_count = 0;
                     state.control |= 0x0C; // Lock PRG to mode 3
-                    state.map_pages(self.header.prg_pages, self.header.chr_pages);
+                    state.map_pages();
                     return;
                 }
 
@@ -310,7 +319,7 @@ impl Rom {
                         3 => state.prg_bank = state.shift_register,
                         _ => unreachable!(),
                     }
-                    state.map_pages(self.header.prg_pages, self.header.chr_pages);
+                    state.map_pages();
                     state.shift_register = 0;
                     state.shift_count = 0;
                 }

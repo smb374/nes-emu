@@ -26,6 +26,19 @@ impl MapperType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MMC1Subtype {
+    /// Standard boards - normal PRG/CHR banking
+    Standard,
+    /// SEROM, SHROM, SH1ROM - 32 KiB unbanked PRG-ROM
+    Unbanked,
+    /// SNROM, SOROM, SUROM, SXROM - 8 KiB CHR, uses CHR registers for extended banking
+    /// Handles all variants with 8K CHR (SNROM's write protect, SOROM/SXROM PRG-RAM banking, SUROM 512K PRG)
+    Sxrom,
+    /// SZROM - 16+ KiB CHR ROM, uses CHR bit 4 for PRG-RAM banking
+    Szrom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MMC1State {
     // Internal shift register
     pub shift_register: u8,
@@ -40,63 +53,154 @@ pub struct MMC1State {
     // Maps
     pub prg_map: [u8; 2],
     pub chr_map: [u8; 2],
+
+    // Configuration
+    is_a_variant: bool,
+    subtype: MMC1Subtype,
+    prg_pages: u8,
+    chr_pages: u8,
 }
 
 impl MMC1State {
-    pub fn new(prg_pages: u8) -> Self {
+    pub fn new(mapper: u8, prg_pages: u8, chr_pages: u8) -> Self {
+        let subtype = Self::detect_subtype(prg_pages, chr_pages);
+
+        println!("subtype={:?}", subtype);
+
         Self {
             shift_register: 0,
             shift_count: 0,
-            control: 0x0C, // Mode 3: fix last bank at $C000, switch at $8000
+            control: 0x0C,
             chr_bank_0: 0,
             chr_bank_1: 0,
             prg_bank: 0,
-            prg_map: [0, prg_pages - 1], // per PRG page
-            chr_map: [0, 1],             // per half CHR page
+            prg_map: [0, prg_pages.saturating_sub(1)],
+            chr_map: [0, 1],
+            is_a_variant: mapper == 155,
+            subtype,
+            prg_pages,
+            chr_pages,
         }
     }
 
-    pub fn map_pages(&mut self, prg_pages: u8, chr_pages: u8) {
-        // SUROM/SXROM: Bit 4 of CHR Bank 0 (at $A000) selects a 256KB outer bank
-        // This applies if the PRG-ROM is 512KB (32 pages)
-        let outer_bank = if prg_pages == 32 {
-            (self.chr_bank_0 >> 4) & 1
-        } else {
-            0
-        };
-        let page_offset = outer_bank * 16; // Each outer bank is 16 pages (256KB)
+    fn detect_subtype(prg_pages: u8, chr_pages: u8) -> MMC1Subtype {
+        // Unbanked: 32 KiB PRG-ROM (2 pages)
+        if prg_pages == 2 {
+            return MMC1Subtype::Unbanked;
+        }
 
-        // Standard PRG-ROM Banking Logic with Outer Bank offset
+        // SZROM: 16+ KiB CHR-ROM (2+ pages)
+        if chr_pages >= 2 {
+            return MMC1Subtype::Szrom;
+        }
+
+        // SXROM variants: exactly 8 KiB CHR (1 page) or CHR-RAM
+        if chr_pages <= 1 {
+            return MMC1Subtype::Sxrom;
+        }
+
+        MMC1Subtype::Standard
+    }
+
+    pub fn map_pages(&mut self) {
+        // For Unbanked, PRG banking is completely disabled
+        if matches!(self.subtype, MMC1Subtype::Unbanked) {
+            self.prg_map = [0, 1];
+            self.update_chr_mapping();
+            return;
+        }
+
+        // Standard PRG banking
         match self.prg_mode() {
             0 | 1 => {
+                // 32 KB mode
                 let page = self.prg_bank & 0x0E;
-                self.prg_map = [page_offset + page, page_offset + page + 1];
+                self.prg_map = [page, page + 1];
             }
             2 => {
+                // Fix first bank at $8000, switch 16 KB at $C000
                 let page = self.prg_bank & 0x0F;
-                self.prg_map = [page_offset, page_offset + page];
+                self.prg_map = [0, page];
             }
             3 => {
+                // Fix last bank at $C000, switch 16 KB at $8000
                 let page = self.prg_bank & 0x0F;
-                // Fixed to the last bank of the current 256KB outer bank
-                self.prg_map = [page_offset + page, prg_pages - 1];
+                self.prg_map = [page, self.prg_pages - 1];
             }
             _ => unreachable!(),
         }
 
-        // CHR Banking
+        // Apply extended PRG-ROM banking for SXROM (covers SUROM's 512K support)
+        if matches!(self.subtype, MMC1Subtype::Sxrom) {
+            // CHR bank 0 bit 4 = PRG-ROM A18 (selects 256 KB half for 512 KB ROMs)
+            let prg_outer_bank = ((self.chr_bank_0 >> 4) & 0x01) as u8;
+            self.prg_map[0] = (prg_outer_bank << 4) | (self.prg_map[0] & 0x0F);
+            self.prg_map[1] = (prg_outer_bank << 4) | (self.prg_map[1] & 0x0F);
+        }
+
+        self.update_chr_mapping();
+    }
+
+    fn update_chr_mapping(&mut self) {
         if self.chr_mode() {
-            if chr_pages == 0 {
-                self.chr_map = [self.chr_bank_0 & 0x1, self.chr_bank_1 & 0x1];
-            } else {
-                self.chr_map = [self.chr_bank_0 & 0x1F, self.chr_bank_1 & 0x1F];
-            }
+            // 4 KiB mode
+            let page0 = self.get_chr_page(0);
+            let page1 = self.get_chr_page(1);
+            self.chr_map = [page0, page1];
         } else {
-            if chr_pages == 0 {
-                self.chr_map = [0, 1];
-            } else {
-                let page = self.chr_bank_0 & 0x0E;
-                self.chr_map = [page, page + 1];
+            // 8 KiB mode
+            let page = self.get_chr_page(0) & 0x1E;
+            self.chr_map = [page, page + 1];
+        }
+    }
+
+    fn get_chr_page(&self, bank: u8) -> u8 {
+        let value = if bank == 0 {
+            self.chr_bank_0
+        } else {
+            self.chr_bank_1
+        };
+
+        match self.subtype {
+            MMC1Subtype::Sxrom => value & 0x01, // Only 8 KiB CHR, 1 bit for banking
+            MMC1Subtype::Szrom => value & 0x0F, // Up to 128 KiB CHR, 4 bits
+            _ => value & 0x1F,                  // Standard: up to 256 KiB CHR, 5 bits
+        }
+    }
+
+    pub fn get_prg_ram_bank(&self) -> u8 {
+        match self.subtype {
+            MMC1Subtype::Sxrom => {
+                // SXROM: CHR bank 0 bits 2-3 select PRG-RAM bank
+                // SOROM: Only bit 3 matters (2 banks)
+                // SUROM/SNROM: No PRG-RAM banking, always bank 0
+                // For simplicity, just use bits 2-3 which works for all variants
+                (self.chr_bank_0 >> 2) & 0x03
+            }
+            MMC1Subtype::Szrom => {
+                // SZROM: CHR bank 0 bit 4 selects PRG-RAM bank (2 banks)
+                (self.chr_bank_0 >> 4) & 0x01
+            }
+            _ => 0, // Standard boards: no PRG-RAM banking
+        }
+    }
+
+    pub fn is_prg_ram_enabled(&self) -> bool {
+        match self.subtype {
+            MMC1Subtype::Sxrom => {
+                // SXROM variants (including SNROM): CHR bank bit 4 is PRG-RAM enable
+                // In 4KB CHR mode, both registers should match (but we simplify by checking bank 0)
+                // 0 = enabled, 1 = disabled
+                ((self.chr_bank_0 >> 4) & 0x01) == 0
+            }
+            _ if self.is_a_variant => {
+                // MMC1A: PRG-RAM always enabled
+                true
+            }
+            _ => {
+                // MMC1B Standard: PRG bank register bit 4 controls enable
+                // 0 = enabled, 1 = disabled
+                ((self.prg_bank >> 4) & 0x01) == 0
             }
         }
     }
