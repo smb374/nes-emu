@@ -1,6 +1,9 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+const PRG_RAM_8K: usize = 0x2000;
+const PRG_RAM_32K: usize = 0x8000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapperType {
-    NROM,
+    NROM(NROMState),
     MMC1(MMC1State),
     UxROM(UxROMState),
     CNROM(CNROMState),
@@ -13,15 +16,82 @@ impl MapperType {
             MapperType::MMC1(s) => Some(s.mirroring()),
             MapperType::MMC3(s) => Some(if s.is_four_screen {
                 Mirroring::FourScreen
+            } else if s.arr_select {
+                Mirroring::Horizontal
             } else {
-                if s.arr_select {
-                    Mirroring::Horizontal
-                } else {
-                    Mirroring::Vertical
-                }
+                Mirroring::Vertical
             }),
             _ => None, // Use hardware mirroring from ROM header
         }
+    }
+
+    /// Read from PRG-RAM ($6000-$7FFF)
+    pub fn read_prg_ram(&self, addr: u16) -> u8 {
+        match self {
+            MapperType::NROM(state) => state.read_prg_ram(addr),
+            MapperType::MMC1(state) => state.read_prg_ram(addr),
+            MapperType::UxROM(state) => state.read_prg_ram(addr),
+            MapperType::CNROM(state) => state.read_prg_ram(addr),
+            MapperType::MMC3(state) => state.read_prg_ram(addr),
+        }
+    }
+
+    /// Write to PRG-RAM ($6000-$7FFF)
+    pub fn write_prg_ram(&mut self, addr: u16, val: u8) {
+        match self {
+            MapperType::NROM(state) => state.write_prg_ram(addr, val),
+            MapperType::MMC1(state) => state.write_prg_ram(addr, val),
+            MapperType::UxROM(state) => state.write_prg_ram(addr, val),
+            MapperType::CNROM(state) => state.write_prg_ram(addr, val),
+            MapperType::MMC3(state) => state.write_prg_ram(addr, val),
+        }
+    }
+
+    /// Check if this mapper has PRG-RAM
+    pub fn has_prg_ram(&self) -> bool {
+        match self {
+            MapperType::NROM(state) => state.prg_ram.is_some(),
+            MapperType::MMC1(_) => true, // MMC1 always has RAM
+            MapperType::UxROM(state) => state.prg_ram.is_some(),
+            MapperType::CNROM(state) => state.prg_ram.is_some(),
+            MapperType::MMC3(_) => true, // MMC3 always has RAM
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NROMState {
+    pub prg_ram: Option<Box<[u8]>>,
+}
+
+impl NROMState {
+    pub fn new(has_prg_ram: bool) -> Self {
+        Self {
+            prg_ram: if has_prg_ram {
+                Some(vec![0u8; PRG_RAM_8K].into_boxed_slice())
+            } else {
+                None
+            },
+        }
+    }
+
+    fn read_prg_ram(&self, addr: u16) -> u8 {
+        self.prg_ram
+            .as_ref()
+            .map(|ram| ram[(addr - 0x6000) as usize % ram.len()])
+            .unwrap_or(0)
+    }
+
+    fn write_prg_ram(&mut self, addr: u16, val: u8) {
+        if let Some(ref mut ram) = self.prg_ram {
+            ram[(addr - 0x6000) as usize % ram.len()] = val;
+        }
+    }
+}
+
+impl Default for NROMState {
+    fn default() -> Self {
+        Self::new(false)
     }
 }
 
@@ -32,13 +102,12 @@ pub enum MMC1Subtype {
     /// SEROM, SHROM, SH1ROM - 32 KiB unbanked PRG-ROM
     Unbanked,
     /// SNROM, SOROM, SUROM, SXROM - 8 KiB CHR, uses CHR registers for extended banking
-    /// Handles all variants with 8K CHR (SNROM's write protect, SOROM/SXROM PRG-RAM banking, SUROM 512K PRG)
     Sxrom,
     /// SZROM - 16+ KiB CHR ROM, uses CHR bit 4 for PRG-RAM banking
     Szrom,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MMC1State {
     // Internal shift register
     pub shift_register: u8,
@@ -54,6 +123,9 @@ pub struct MMC1State {
     pub prg_map: [u8; 2],
     pub chr_map: [u8; 2],
 
+    // PRG-RAM (8KB to 32KB depending on board)
+    pub prg_ram: Box<[u8]>,
+
     // Configuration
     is_a_variant: bool,
     subtype: MMC1Subtype,
@@ -65,8 +137,6 @@ impl MMC1State {
     pub fn new(mapper: u8, prg_pages: u8, chr_pages: u8) -> Self {
         let subtype = Self::detect_subtype(prg_pages, chr_pages);
 
-        println!("subtype={:?}", subtype);
-
         Self {
             shift_register: 0,
             shift_count: 0,
@@ -76,6 +146,7 @@ impl MMC1State {
             prg_bank: 0,
             prg_map: [0, prg_pages.saturating_sub(1)],
             chr_map: [0, 1],
+            prg_ram: vec![0u8; PRG_RAM_32K].into_boxed_slice(),
             is_a_variant: mapper == 155,
             subtype,
             prg_pages,
@@ -84,22 +155,37 @@ impl MMC1State {
     }
 
     fn detect_subtype(prg_pages: u8, chr_pages: u8) -> MMC1Subtype {
-        // Unbanked: 32 KiB PRG-ROM (2 pages)
         if prg_pages == 2 {
             return MMC1Subtype::Unbanked;
         }
-
-        // SZROM: 16+ KiB CHR-ROM (2+ pages)
-        if chr_pages >= 2 {
-            return MMC1Subtype::Szrom;
+        if prg_pages >= 8 {
+            if chr_pages == 1 {
+                return MMC1Subtype::Sxrom;
+            } else if chr_pages >= 2 {
+                return MMC1Subtype::Szrom;
+            }
         }
-
-        // SXROM variants: exactly 8 KiB CHR (1 page) or CHR-RAM
-        if chr_pages <= 1 {
-            return MMC1Subtype::Sxrom;
-        }
-
         MMC1Subtype::Standard
+    }
+
+    fn read_prg_ram(&self, addr: u16) -> u8 {
+        if !self.is_prg_ram_enabled() {
+            return 0;
+        }
+        let bank = self.get_prg_ram_bank() as usize;
+        let offset = (addr - 0x6000) as usize;
+        let index = (bank * PRG_RAM_8K + offset) % self.prg_ram.len();
+        self.prg_ram[index]
+    }
+
+    fn write_prg_ram(&mut self, addr: u16, val: u8) {
+        if !self.is_prg_ram_enabled() {
+            return;
+        }
+        let bank = self.get_prg_ram_bank() as usize;
+        let offset = (addr - 0x6000) as usize;
+        let index = (bank * PRG_RAM_8K + offset) % self.prg_ram.len();
+        self.prg_ram[index] = val;
     }
 
     pub fn map_pages(&mut self) {
@@ -130,13 +216,16 @@ impl MMC1State {
             _ => unreachable!(),
         }
 
-        // Apply extended PRG-ROM banking for SXROM (covers SUROM's 512K support)
-        if matches!(self.subtype, MMC1Subtype::Sxrom) {
-            // CHR bank 0 bit 4 = PRG-ROM A18 (selects 256 KB half for 512 KB ROMs)
+        // Apply extended PRG-ROM banking ONLY for 512KB+ ROMs (SUROM)
+        if matches!(self.subtype, MMC1Subtype::Sxrom) && self.prg_pages > 16 {
             let prg_outer_bank = ((self.chr_bank_0 >> 4) & 0x01) as u8;
             self.prg_map[0] = (prg_outer_bank << 4) | (self.prg_map[0] & 0x0F);
             self.prg_map[1] = (prg_outer_bank << 4) | (self.prg_map[1] & 0x0F);
         }
+
+        // Ensure banks are within valid range
+        self.prg_map[0] %= self.prg_pages;
+        self.prg_map[1] %= self.prg_pages;
 
         self.update_chr_mapping();
     }
@@ -162,46 +251,25 @@ impl MMC1State {
         };
 
         match self.subtype {
-            MMC1Subtype::Sxrom => value & 0x01, // Only 8 KiB CHR, 1 bit for banking
-            MMC1Subtype::Szrom => value & 0x0F, // Up to 128 KiB CHR, 4 bits
-            _ => value & 0x1F,                  // Standard: up to 256 KiB CHR, 5 bits
+            MMC1Subtype::Sxrom => value & 0x01,
+            MMC1Subtype::Szrom => value & 0x0F,
+            _ => value & 0x1F,
         }
     }
 
     pub fn get_prg_ram_bank(&self) -> u8 {
         match self.subtype {
-            MMC1Subtype::Sxrom => {
-                // SXROM: CHR bank 0 bits 2-3 select PRG-RAM bank
-                // SOROM: Only bit 3 matters (2 banks)
-                // SUROM/SNROM: No PRG-RAM banking, always bank 0
-                // For simplicity, just use bits 2-3 which works for all variants
-                (self.chr_bank_0 >> 2) & 0x03
-            }
-            MMC1Subtype::Szrom => {
-                // SZROM: CHR bank 0 bit 4 selects PRG-RAM bank (2 banks)
-                (self.chr_bank_0 >> 4) & 0x01
-            }
-            _ => 0, // Standard boards: no PRG-RAM banking
+            MMC1Subtype::Sxrom => (self.chr_bank_0 >> 2) & 0x03,
+            MMC1Subtype::Szrom => (self.chr_bank_0 >> 4) & 0x01,
+            _ => 0,
         }
     }
 
     pub fn is_prg_ram_enabled(&self) -> bool {
         match self.subtype {
-            MMC1Subtype::Sxrom => {
-                // SXROM variants (including SNROM): CHR bank bit 4 is PRG-RAM enable
-                // In 4KB CHR mode, both registers should match (but we simplify by checking bank 0)
-                // 0 = enabled, 1 = disabled
-                ((self.chr_bank_0 >> 4) & 0x01) == 0
-            }
-            _ if self.is_a_variant => {
-                // MMC1A: PRG-RAM always enabled
-                true
-            }
-            _ => {
-                // MMC1B Standard: PRG bank register bit 4 controls enable
-                // 0 = enabled, 1 = disabled
-                ((self.prg_bank >> 4) & 0x01) == 0
-            }
+            MMC1Subtype::Sxrom => ((self.chr_bank_0 >> 4) & 0x01) == 0,
+            _ if self.is_a_variant => true,
+            _ => ((self.prg_bank >> 4) & 0x01) == 0,
         }
     }
 
@@ -224,7 +292,83 @@ impl MMC1State {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UxROMState {
+    pub prg_bank: u8,
+    pub prg_ram: Option<Box<[u8]>>,
+}
+
+impl UxROMState {
+    pub fn new(has_prg_ram: bool) -> Self {
+        Self {
+            prg_bank: 0,
+            prg_ram: if has_prg_ram {
+                Some(vec![0u8; PRG_RAM_8K].into_boxed_slice())
+            } else {
+                None
+            },
+        }
+    }
+
+    fn read_prg_ram(&self, addr: u16) -> u8 {
+        self.prg_ram
+            .as_ref()
+            .map(|ram| ram[(addr - 0x6000) as usize])
+            .unwrap_or(0)
+    }
+
+    fn write_prg_ram(&mut self, addr: u16, val: u8) {
+        if let Some(ref mut ram) = self.prg_ram {
+            ram[(addr - 0x6000) as usize] = val;
+        }
+    }
+}
+
+impl Default for UxROMState {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CNROMState {
+    pub chr_bank: u8,
+    pub prg_ram: Option<Box<[u8]>>,
+}
+
+impl CNROMState {
+    pub fn new(has_prg_ram: bool) -> Self {
+        Self {
+            chr_bank: 0,
+            prg_ram: if has_prg_ram {
+                Some(vec![0u8; PRG_RAM_8K].into_boxed_slice())
+            } else {
+                None
+            },
+        }
+    }
+
+    fn read_prg_ram(&self, addr: u16) -> u8 {
+        self.prg_ram
+            .as_ref()
+            .map(|ram| ram[(addr - 0x6000) as usize])
+            .unwrap_or(0)
+    }
+
+    fn write_prg_ram(&mut self, addr: u16, val: u8) {
+        if let Some(ref mut ram) = self.prg_ram {
+            ram[(addr - 0x6000) as usize] = val;
+        }
+    }
+}
+
+impl Default for CNROMState {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MMC3State {
     pub banks: [u8; 8],
     pub chr_map: [u8; 8], // 1KB banks
@@ -242,9 +386,13 @@ pub struct MMC3State {
     // Other
     pub arr_select: bool,
     pub prg_ram_enable: bool,
+    pub prg_ram_protect: bool,
     pub prg_banks: u8,
     pub chr_banks: u8,
     pub is_four_screen: bool,
+
+    // PRG-RAM (8KB standard for MMC3)
+    pub prg_ram: Box<[u8]>,
 }
 
 impl MMC3State {
@@ -264,11 +412,28 @@ impl MMC3State {
             irq_enabled: false,
             arr_select: false,
             prg_ram_enable: true,
+            prg_ram_protect: false,
             prg_banks: prg_pages * 2,
             chr_banks: banks,
             is_four_screen,
+            prg_ram: vec![0u8; PRG_RAM_8K].into_boxed_slice(),
         }
     }
+
+    fn read_prg_ram(&self, addr: u16) -> u8 {
+        if self.prg_ram_enable {
+            self.prg_ram[(addr - 0x6000) as usize]
+        } else {
+            0
+        }
+    }
+
+    fn write_prg_ram(&mut self, addr: u16, val: u8) {
+        if self.prg_ram_enable && !self.prg_ram_protect {
+            self.prg_ram[(addr - 0x6000) as usize] = val;
+        }
+    }
+
     pub fn map_pages(&mut self) {
         if self.chr_swap {
             self.chr_map = [
@@ -308,28 +473,6 @@ impl MMC3State {
                 self.prg_banks - 1,
             ];
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UxROMState {
-    pub prg_bank: u8, // Switchable bank at $8000
-}
-
-impl Default for UxROMState {
-    fn default() -> Self {
-        Self { prg_bank: 0 }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CNROMState {
-    pub chr_bank: u8, // CHR bank select
-}
-
-impl Default for CNROMState {
-    fn default() -> Self {
-        Self { chr_bank: 0 }
     }
 }
 

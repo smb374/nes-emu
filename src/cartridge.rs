@@ -21,7 +21,6 @@ pub struct Rom {
     pub chr_data: Box<[u8]>,
     pub hardware_mirroring: Mirroring, // From ROM header (solder pads)
     pub mapper: MapperType,
-    pub prg_ram: Option<Box<[u8]>>,
     pub trainer: Option<[u8; 512]>,
     pub irq_sig: bool,
     header: NesHeader,
@@ -68,16 +67,16 @@ impl Rom {
         let prg_rom_start = if header.has_trainer { 16 + 512 } else { 16 };
         let chr_rom_start = prg_rom_start + prg_rom_size;
 
-        // Initialize mapper state
+        // Initialize mapper state - PRG-RAM is now managed by the mapper
         let mapper = match header.mapper {
-            0 => MapperType::NROM,
-            1 => MapperType::MMC1(MMC1State::new(
+            0 => MapperType::NROM(NROMState::new(header.has_prg_ram)),
+            1 | 155 => MapperType::MMC1(MMC1State::new(
                 header.mapper,
                 header.prg_pages,
                 header.chr_pages,
             )),
-            2 => MapperType::UxROM(UxROMState::default()),
-            3 => MapperType::CNROM(CNROMState::default()),
+            2 => MapperType::UxROM(UxROMState::new(header.has_prg_ram)),
+            3 => MapperType::CNROM(CNROMState::new(header.has_prg_ram)),
             4 => MapperType::MMC3(MMC3State::new(
                 header.prg_pages,
                 header.chr_pages,
@@ -89,13 +88,6 @@ impl Rom {
                     header.mapper
                 ));
             }
-        };
-
-        // PRG-RAM allocation (8KB standard)
-        let prg_ram = if header.has_prg_ram {
-            Some(vec![0u8; 0x8000].into_boxed_slice())
-        } else {
-            None
         };
 
         // Load CHR data (or allocate CHR-RAM)
@@ -112,7 +104,6 @@ impl Rom {
             chr_data,
             mapper,
             hardware_mirroring,
-            prg_ram,
             trainer,
             header,
             irq_sig: false,
@@ -121,28 +112,8 @@ impl Rom {
 
     pub fn read_prg(&mut self, addr: u16) -> u8 {
         match addr {
-            // PRG-RAM
-            0x6000..=0x7FFF => {
-                if let Some(ref ram) = self.prg_ram {
-                    match self.mapper {
-                        MapperType::MMC3(ref state) => {
-                            if state.prg_ram_enable {
-                                ram[(addr - 0x6000) as usize]
-                            } else {
-                                0
-                            }
-                        }
-                        MapperType::MMC1(ref state) => {
-                            let bank = state.get_prg_ram_bank();
-                            let offset = addr - (addr & 0xE000);
-                            ram[bank as usize * 0x2000 + offset as usize]
-                        }
-                        _ => ram[(addr - 0x6000) as usize],
-                    }
-                } else {
-                    0
-                }
-            }
+            // PRG-RAM - delegated to mapper
+            0x6000..=0x7FFF => self.mapper.read_prg_ram(addr),
             // PRG-ROM
             0x8000..=0xFFFF => self.read_prg_rom(addr),
             _ => 0,
@@ -151,24 +122,8 @@ impl Rom {
 
     pub fn write_prg(&mut self, addr: u16, val: u8) {
         match addr {
-            // PRG-RAM
-            0x6000..=0x7FFF => {
-                if let Some(ref mut ram) = self.prg_ram {
-                    match self.mapper {
-                        MapperType::MMC3(ref state) => {
-                            if state.prg_ram_enable {
-                                ram[(addr - 0x6000) as usize] = val;
-                            }
-                        }
-                        MapperType::MMC1(ref state) => {
-                            let bank = state.get_prg_ram_bank();
-                            let offset = addr - (addr & 0xE000);
-                            ram[bank as usize * 0x2000 + offset as usize] = val;
-                        }
-                        _ => ram[(addr - 0x6000) as usize] = val,
-                    }
-                }
-            }
+            // PRG-RAM - delegated to mapper
+            0x6000..=0x7FFF => self.mapper.write_prg_ram(addr, val),
             // Mapper registers
             0x8000..=0xFFFF => self.write_mapper_register(addr, val),
             _ => {}
@@ -177,7 +132,7 @@ impl Rom {
 
     pub fn read_chr(&self, addr: u16) -> u8 {
         match self.mapper {
-            MapperType::NROM | MapperType::UxROM(_) => {
+            MapperType::NROM(_) | MapperType::UxROM(_) => {
                 // Direct access (UxROM uses CHR-RAM)
                 let idx = (addr as usize) % self.chr_data.len();
                 self.chr_data[idx]
@@ -211,7 +166,7 @@ impl Rom {
     }
 
     pub fn mirroring(&self) -> Mirroring {
-        // MMC1 can override hardware mirroring
+        // Mapper can override hardware mirroring
         self.mapper
             .mapper_mirroring()
             .unwrap_or(self.hardware_mirroring)
@@ -220,15 +175,12 @@ impl Rom {
     pub fn clock_scanline_irq(&mut self) {
         if let MapperType::MMC3(ref mut state) = self.mapper {
             if state.irq_counter == 0 || state.irq_reload {
-                // Reload with latch value
                 state.irq_counter = state.irq_latch;
                 state.irq_reload = false;
             } else {
-                // Decrement counter
                 state.irq_counter -= 1;
             }
 
-            // Check if we should trigger IRQ
             if state.irq_counter == 0 && state.irq_enabled {
                 self.irq_sig = true;
             }
@@ -237,7 +189,7 @@ impl Rom {
 
     fn read_prg_rom(&self, addr: u16) -> u8 {
         match self.mapper {
-            MapperType::NROM => {
+            MapperType::NROM(_) => {
                 // Mirror if 16KB ROM
                 self.prg_rom[(addr - 0x8000) as usize % self.prg_rom.len()]
             }
@@ -261,7 +213,7 @@ impl Rom {
             }
             MapperType::CNROM(_) => {
                 // Fixed 32KB PRG-ROM
-                self.prg_rom[(addr - 0x8000) as usize]
+                self.prg_rom[(addr - 0x8000) as usize % self.prg_rom.len()]
             }
             MapperType::MMC1(ref state) => {
                 let idx = (addr >> 14) & 0x1;
@@ -280,7 +232,7 @@ impl Rom {
 
     fn write_mapper_register(&mut self, addr: u16, val: u8) {
         match self.mapper {
-            MapperType::NROM => {
+            MapperType::NROM(_) => {
                 // No registers
             }
 
@@ -346,6 +298,7 @@ impl Rom {
                 }
                 0xA001 => {
                     state.prg_ram_enable = (val & 0x80) != 0;
+                    state.prg_ram_protect = (val & 0x40) != 0;
                 }
                 0xC000 => {
                     state.irq_latch = val;
@@ -446,5 +399,20 @@ pub mod test {
 
         assert_eq!(rom.chr_data.len(), CHR_ROM_PAGE_SIZE); // 8KB CHR-RAM
         assert!(matches!(rom.mapper, MapperType::UxROM(_)));
+    }
+
+    #[test]
+    fn test_mmc1_has_prg_ram() {
+        let test_rom = create_rom(TestRom {
+            header: vec![
+                0x4E, 0x45, 0x53, 0x1A, 0x08, 0x00, 0x10, 00, 00, 00, 00, 00, 00, 00, 00, 00,
+            ],
+            trainer: None,
+            prg_rom: vec![1; 8 * PRG_ROM_PAGE_SIZE],
+            chr_rom: vec![],
+        });
+
+        let rom = Rom::new(&test_rom).unwrap();
+        assert!(rom.mapper.has_prg_ram());
     }
 }
