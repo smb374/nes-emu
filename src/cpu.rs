@@ -114,14 +114,14 @@ impl<'a> CPU<'a> {
             self.pc += 1;
             let pc_cache = self.pc;
             if let Some(op) = OPS[opcode as usize] {
+                let (irq_sig0, exit0) = self.bus.tick(op.cycles as u16);
                 let extra_cycles = self.run_op(op);
-                let cycles = op.cycles + extra_cycles;
-                self.cycles += cycles as usize;
-                let (irq_sig, exit) = self.bus.tick(cycles);
-                if exit {
+                let (irq_sig1, exit1) = self.bus.tick(extra_cycles as u16);
+                self.cycles += (op.cycles + extra_cycles) as usize;
+                if exit0 || exit1 {
                     break;
                 }
-                self.irq_sig = self.irq_sig || irq_sig;
+                self.irq_sig = self.irq_sig || irq_sig0 || irq_sig1;
                 if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
                 }
@@ -787,22 +787,18 @@ impl<'a> CPU<'a> {
                 }
             }
             DCP => {
-                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let (addr_opt, _) = self.operand_addr(op.mode);
                 let addr = addr_opt.unwrap();
                 let res = self.read_u8(addr).wrapping_sub(1);
                 self.write_u8(addr, res);
                 let (res, car) = self.reg_a.overflowing_sub(res);
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
-                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
-                    1
-                } else {
-                    0
-                }
+                0
             }
             DOP => 0,
             ISC => {
-                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let (addr_opt, _) = self.operand_addr(op.mode);
                 let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr).wrapping_add(1);
                 self.write_u8(addr, val);
@@ -819,11 +815,7 @@ impl<'a> CPU<'a> {
 
                 self.reg_a = res;
                 self.update_nz(self.reg_a);
-                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
-                    1
-                } else {
-                    0
-                }
+                0
             }
             KIL => {
                 std::process::exit(0);
@@ -856,7 +848,7 @@ impl<'a> CPU<'a> {
                 }
             }
             RLA => {
-                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let (addr_opt, _) = self.operand_addr(op.mode);
                 let addr = addr_opt.unwrap();
                 {
                     let val = self.read_u8(addr);
@@ -869,15 +861,11 @@ impl<'a> CPU<'a> {
                 {
                     self.reg_a &= self.read_u8(addr);
                     self.update_nz(self.reg_a);
-                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
-                        1
-                    } else {
-                        0
-                    }
+                    0
                 }
             }
             RRA => {
-                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let (addr_opt, _) = self.operand_addr(op.mode);
                 let addr = addr_opt.unwrap();
                 {
                     let ocar = self.status.contains(CpuFlags::CARRY);
@@ -902,15 +890,11 @@ impl<'a> CPU<'a> {
 
                     self.reg_a = result;
                     self.update_nz(self.reg_a);
-                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
-                        1
-                    } else {
-                        0
-                    }
+                    0
                 }
             }
             SLO => {
-                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let (addr_opt, _) = self.operand_addr(op.mode);
                 let addr = addr_opt.unwrap();
                 {
                     let mut val = self.read_u8(addr);
@@ -922,15 +906,11 @@ impl<'a> CPU<'a> {
                 {
                     self.reg_a |= self.read_u8(addr);
                     self.update_nz(self.reg_a);
-                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
-                        1
-                    } else {
-                        0
-                    }
+                    0
                 }
             }
             SRE => {
-                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let (addr_opt, _) = self.operand_addr(op.mode);
                 let addr = addr_opt.unwrap();
                 {
                     let mut val = self.read_u8(addr);
@@ -942,11 +922,7 @@ impl<'a> CPU<'a> {
                 {
                     self.reg_a ^= self.read_u8(addr);
                     self.update_nz(self.reg_a);
-                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
-                        1
-                    } else {
-                        0
-                    }
+                    0
                 }
             }
             SXA => {

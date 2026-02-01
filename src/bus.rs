@@ -74,12 +74,13 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self, cycles: u8) -> (bool, bool) {
+    pub fn tick(&mut self, cycles: u16) -> (bool, bool) {
         let mut exit = false;
         self.cycles += cycles as usize;
 
+        let mut stall = 0;
         for _ in 0..cycles {
-            self.apu.tick(&mut self.rom, 1);
+            stall += self.apu.tick(&mut self.rom, 1);
             let nmi_before = self.ppu.nmi_interrupt.is_some();
             self.ppu.tick(&mut self.rom, 3);
             let nmi_after = self.ppu.nmi_interrupt.is_some();
@@ -95,7 +96,12 @@ impl<'call> Bus<'call> {
         self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
         self.apu.irq_sig = false;
-        (mapper_irq || apu_irq, exit)
+        if stall != 0 {
+            let (irq_s, exit_s) = self.tick(stall as u16);
+            (mapper_irq || apu_irq || irq_s, exit || exit_s)
+        } else {
+            (mapper_irq || apu_irq, exit)
+        }
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
@@ -118,7 +124,7 @@ impl<'call> Mem for Bus<'call> {
                 // panic!("Attempt to read from write-only PPU address {:x}", addr);
                 0
             }
-            0x2001 => self.ppu.read_mask(), // Ice Climber reads this.
+            0x2001 => self.ppu.read_mask(),
             0x2002 => self.ppu.read_status(),
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(&mut self.rom),
@@ -214,9 +220,12 @@ impl<'call> Mem for Bus<'call> {
                 let hi: u16 = (data as u16) << 8;
                 for i in 0..256u16 {
                     buffer[i as usize] = self.read_u8(hi + i);
+                    self.tick(2);
                 }
 
                 self.ppu.write_oam_dma(&buffer);
+                let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
+                self.tick(add_cycles); //todo this will cause weird effects as PPU will have 513/514 * 3 ticks
             }
 
             0x4015 => self.apu.write_status(data),

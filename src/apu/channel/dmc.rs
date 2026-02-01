@@ -112,7 +112,8 @@ impl DMCChannel {
     }
 
     /// Clock the timer
-    pub fn clock_timer(&mut self, cycles: usize, rom: &mut Rom) {
+    pub fn clock_timer(&mut self, cycles: usize, rom: &mut Rom) -> usize {
+        let mut stall = 0;
         for _ in 0..cycles {
             // Timer
             if self.timer_counter == 0 {
@@ -126,6 +127,7 @@ impl DMCChannel {
             if self.sample_buffer_empty && self.bytes_remaining > 0 {
                 // Read from CPU memory
                 self.sample_buffer = rom.read_prg(self.current_address);
+                stall += 4;
                 self.sample_buffer_empty = false;
 
                 // Advance address with wrapping
@@ -146,6 +148,7 @@ impl DMCChannel {
                 }
             }
         }
+        stall
     }
 
     /// Clock the output unit
@@ -168,8 +171,6 @@ impl DMCChannel {
             self.shift_register >>= 1;
         }
 
-        self.bits_remaining -= 1;
-
         if self.bits_remaining == 0 {
             self.bits_remaining = 8;
 
@@ -180,6 +181,8 @@ impl DMCChannel {
                 self.shift_register = self.sample_buffer;
                 self.sample_buffer_empty = true;
             }
+        } else {
+            self.bits_remaining -= 1;
         }
     }
 

@@ -263,26 +263,27 @@ impl PPU {
                 // Render the completed scanline
                 self.render_scanline(rom);
             }
-            // Pre-render scanline (261) - copy vertical scroll
-            if self.scanline == 261 {
-                if self.mask.show_background() || self.mask.show_sprites() {
-                    // Copy vertical scroll from t to v
-                    self.internal.copy_vertical();
-                }
-                // Clear VBlank and sprite 0 hit flags
-                self.status.remove(StatusRegister::VBLANK_STARTED);
-                self.status.set(StatusRegister::SPRITE_ZERO_HIT, false);
+            // Handle Pre-render vertical scroll copy (Keep this at cycle 341 is fine for now)
+            if self.scanline == 261 && (self.mask.show_background() || self.mask.show_sprites()) {
+                self.internal.copy_vertical();
             }
+
             self.cycles -= 341;
             self.scanline += 1;
-            // Scanline 241: Enter VBlank
+
+            if self.scanline == 261 {
+                self.status.remove(StatusRegister::VBLANK_STARTED);
+                self.status.set(StatusRegister::SPRITE_ZERO_HIT, false);
+                self.status.remove(StatusRegister::SPRITE_OVERFLOW);
+            }
+
             if self.scanline == 241 {
                 self.status.set(StatusRegister::VBLANK_STARTED, true);
                 if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
                     self.nmi_interrupt = Some(1);
                 }
             }
-            // Scanline 262: Wrap to scanline 0
+
             if self.scanline >= 262 {
                 self.scanline = 0;
                 self.nmi_interrupt = None;
