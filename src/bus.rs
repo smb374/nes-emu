@@ -112,6 +112,10 @@ impl<'call> Bus<'call> {
     pub fn save_prg_ram(&self) -> Result<(), String> {
         self.rom.save_prg_ram()
     }
+
+    pub fn get_ppu_stat(&self) -> (u16, u16) {
+        (self.ppu.cycles as u16, self.ppu.scanline)
+    }
 }
 
 impl<'call> Mem for Bus<'call> {

@@ -48,7 +48,7 @@ pub struct CPU<'a> {
     pub reg_y: u8,
     pub sp: u8,
     pub status: CpuFlags,
-    bus: Bus<'a>,
+    pub bus: Bus<'a>,
     irq_sig: bool,
     pub cycles: usize,
 }

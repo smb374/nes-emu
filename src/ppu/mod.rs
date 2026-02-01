@@ -20,8 +20,8 @@ pub struct PPU {
     internal_data_buf: u8,
 
     pub nmi_interrupt: Option<u8>,
-    scanline: u16,
-    cycles: usize,
+    pub scanline: u16,
+    pub cycles: usize,
 
     pub frame_buffer: [u8; 256 * 240 * 3],
     // Buffer to store sprite data for the current scanline (calculated at start of line)
