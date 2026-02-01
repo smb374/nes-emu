@@ -324,7 +324,7 @@ impl PPU {
             let sprite_y = self.oam_data[oam_offset] as u16;
 
             // Check if sprite is on this scanline
-            if self.scanline < sprite_y || self.scanline >= sprite_y + sprite_size as u16 {
+            if self.scanline < sprite_y + 1 || self.scanline >= sprite_y + 1 + sprite_size as u16 {
                 continue;
             }
 
@@ -344,7 +344,7 @@ impl PPU {
             let flip_v = (attributes >> 7) & 1 == 1;
             let is_sprite_0 = sprite_idx == 0;
 
-            let mut y_offset = self.scanline - sprite_y;
+            let mut y_offset = self.scanline - (sprite_y + 1);
             if flip_v {
                 y_offset = sprite_size as u16 - 1 - y_offset;
             }
