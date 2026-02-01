@@ -114,14 +114,14 @@ impl<'a> CPU<'a> {
             self.pc += 1;
             let pc_cache = self.pc;
             if let Some(op) = OPS[opcode as usize] {
-                let (irq_sig0, exit0) = self.bus.tick(op.cycles as u16);
                 let extra_cycles = self.run_op(op);
-                let (irq_sig1, exit1) = self.bus.tick(extra_cycles as u16);
-                self.cycles += (op.cycles + extra_cycles) as usize;
-                if exit0 || exit1 {
+                let cycles = op.cycles + extra_cycles;
+                let (irq_sig, exit) = self.bus.tick(cycles as u16);
+                self.cycles += cycles as usize;
+                if exit {
                     break;
                 }
-                self.irq_sig = self.irq_sig || irq_sig0 || irq_sig1;
+                self.irq_sig = self.irq_sig || irq_sig;
                 if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
                 }

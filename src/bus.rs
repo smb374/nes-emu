@@ -81,32 +81,27 @@ impl<'call> Bus<'call> {
         self.cycles += tcycles as usize;
 
         let mut stall = 0;
-        for c in 0..tcycles {
+        for _ in 0..cycles {
             stall += self.apu.tick(&mut self.rom, 1);
             let nmi_before = self.ppu.nmi_interrupt.is_some();
             self.ppu.tick(&mut self.rom, 3);
             let nmi_after = self.ppu.nmi_interrupt.is_some();
-            let nmi_edge = !nmi_before && nmi_after;
-            let mapper_irq = self.rom.irq_sig;
-            self.rom.irq_sig = false;
-            let apu_irq = self.apu.irq_sig;
-            self.apu.irq_sig = false;
-            let is_irq = mapper_irq || apu_irq;
 
-            if nmi_edge {
-                self.cycles_acc = tcycles - c + stall;
-                return (is_irq, (self.cb)(&self.ppu, &mut self.joypad1));
-            } else if is_irq {
-                self.cycles_acc = tcycles - c + stall;
-                return (is_irq, false);
+            if !nmi_before && nmi_after {
+                if (self.cb)(&self.ppu, &mut self.joypad1) {
+                    return (false, true);
+                }
             }
         }
 
         if stall != 0 {
             self.tick(stall as u16)
         } else {
-            self.cycles_acc = 0;
-            (false, false)
+            let mapper_irq = self.rom.irq_sig;
+            self.rom.irq_sig = false;
+            let apu_irq = self.apu.irq_sig;
+            self.apu.irq_sig = false;
+            (mapper_irq || apu_irq, false)
         }
     }
 
