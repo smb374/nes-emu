@@ -359,9 +359,9 @@ impl Rom {
                 }
                 0x8001 => {
                     match state.command {
-                        0 | 1 => state.banks[state.command as usize] = val & 0xFE,
-                        2..=5 => state.banks[state.command as usize] = val,
-                        6 | 7 => state.banks[state.command as usize] = val & 0x3F,
+                        0 | 1 => state.banks[state.command as usize] = val as u16 & 0xFE,
+                        2..=5 => state.banks[state.command as usize] = val as u16,
+                        6 | 7 => state.banks[state.command as usize] = val as u16 & 0x3F,
                         _ => unreachable!(),
                     }
                     state.map_pages();
