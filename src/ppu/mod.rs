@@ -24,12 +24,27 @@ pub struct PPU {
     cycles: usize,
 
     pub frame_buffer: [u8; 256 * 240 * 3],
-    bg_scanline: [u8; 256],
+    // Buffer to store sprite data for the current scanline (calculated at start of line)
     sprite_scanline: [Option<(u8, bool, bool)>; 256],
 
-    // A12 stuff
+    // Background rendering shift registers
+    bg_pattern_lo: u16,
+    bg_pattern_hi: u16,
+    bg_attrib_lo: u16,
+    bg_attrib_hi: u16,
+
+    // Latches for the next tile
+    bg_nt_id: u8,
+    bg_nt_attrib: u8,
+    bg_nt_lsb: u8,
+    bg_nt_msb: u8,
+
+    // A12 IRQ state
     a12_state: bool,
     a12lo_period: usize,
+
+    // Odd frame state
+    odd_frame: bool,
 }
 
 impl PPU {
@@ -48,251 +63,347 @@ impl PPU {
             cycles: 0,
             internal: InternalRegisters::new(),
             frame_buffer: [0; 256 * 240 * 3],
-            bg_scanline: [0; 256],
             sprite_scanline: [None; 256],
+
+            bg_pattern_lo: 0,
+            bg_pattern_hi: 0,
+            bg_attrib_lo: 0,
+            bg_attrib_hi: 0,
+            bg_nt_id: 0,
+            bg_nt_attrib: 0,
+            bg_nt_lsb: 0,
+            bg_nt_msb: 0,
+
             a12_state: false,
             a12lo_period: 0,
-        }
-    }
 
-    fn increment_vram_addr(&mut self, _rom: &mut Rom) {
-        self.internal.increment_v(self.ctrl.vram_addr_increment());
-    }
-
-    pub fn update_a12(&mut self, addr: u16, rom: &mut Rom) {
-        let a12 = (addr & 0x1000) != 0;
-
-        if a12 != self.a12_state {
-            if !a12 {
-                self.a12lo_period = 0; // Reset counter when A12 goes LOW
-            } else {
-                if self.a12lo_period >= 15 {
-                    // Check if it stayed LOW long enough
-                    rom.clock_scanline_irq();
-                }
-            }
-        } else if !a12 {
-            self.a12lo_period += 2; // Increment if it STAYS low
-        }
-        self.a12_state = a12;
-    }
-    // Render a single scanline into the frame buffer
-    fn render_scanline(&mut self, rom: &mut Rom) {
-        // Clear scanline buffers
-        self.bg_scanline.fill(0);
-        self.sprite_scanline.fill(None);
-
-        // Render background
-        if self.mask.show_background() && self.scanline < 240 {
-            let bank = self.ctrl.bknd_pattern_addr();
-            let fine_y = self.internal.fine_y();
-            let fine_x = self.internal.fine_x();
-            let coarse_y = self.internal.coarse_y() as usize;
-            let nametable_bits = self.internal.nametable();
-
-            for tile_idx in 0..33 {
-                let coarse_x = ((self.internal.coarse_x() as usize + tile_idx) & 0x1F) as usize;
-
-                // Handle horizontal wrapping to next nametable
-                let mut current_nt = nametable_bits;
-                if coarse_x < self.internal.coarse_x() as usize {
-                    // Wrapped around, switch to horizontal neighbor
-                    current_nt ^= 1;
-                }
-
-                // Build the actual nametable address (0x2000 + nametable*0x400 + offset)
-                let nt_base = 0x2000 + (current_nt as u16) * 0x400;
-                let nt_offset = (coarse_y * 32 + coarse_x) as u16;
-                let tile_num = self.peek_vram(rom, nt_base + nt_offset);
-
-                let attr_offset = 0x3C0 + ((coarse_y / 4) * 8 + (coarse_x / 4)) as u16;
-                let attr_byte = self.peek_vram(rom, nt_base + attr_offset);
-
-                let palette_idx = match (coarse_x % 4 / 2, coarse_y % 4 / 2) {
-                    (0, 0) => attr_byte & 0b11,
-                    (1, 0) => (attr_byte >> 2) & 0b11,
-                    (0, 1) => (attr_byte >> 4) & 0b11,
-                    (1, 1) => (attr_byte >> 6) & 0b11,
-                    _ => 0,
-                };
-
-                let tile_addr = bank + (tile_num as u16) * 16 + fine_y as u16;
-                let tile_low = rom.read_chr(tile_addr);
-                let tile_high = rom.read_chr(tile_addr + 8);
-
-                for pixel in 0..8 {
-                    let bit = 7 - pixel;
-                    let color_bits = ((tile_high >> bit) & 1) << 1 | ((tile_low >> bit) & 1);
-                    let screen_x = (tile_idx * 8 + pixel).wrapping_sub(fine_x as usize);
-
-                    if screen_x < 256 {
-                        if screen_x < 8 && !self.mask.show_leftmost_background() {
-                            self.bg_scanline[screen_x] = 0;
-                            continue;
-                        }
-                        if color_bits == 0 {
-                            self.bg_scanline[screen_x] = 0;
-                        } else {
-                            self.bg_scanline[screen_x] = palette_idx * 4 + color_bits;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Render sprites
-        if self.mask.show_sprites() && self.scanline < 240 {
-            let sprite_size = self.ctrl.sprite_size(); // Usually returns 8 or 16
-
-            for sprite_idx in (0..64).rev() {
-                let oam_offset = sprite_idx * 4;
-                let sprite_y = self.oam_data[oam_offset] as u16;
-                let tile_num = self.oam_data[oam_offset + 1];
-                let attributes = self.oam_data[oam_offset + 2];
-                let sprite_x = self.oam_data[oam_offset + 3] as usize;
-
-                if self.scanline < sprite_y || self.scanline >= sprite_y + sprite_size as u16 {
-                    continue;
-                }
-
-                let palette_idx = attributes & 0b11;
-                let priority = (attributes >> 5) & 1 == 1;
-                let flip_h = (attributes >> 6) & 1 == 1;
-                let flip_v = (attributes >> 7) & 1 == 1;
-                let is_sprite_0 = sprite_idx == 0;
-
-                let mut y_offset = self.scanline - sprite_y;
-                if flip_v {
-                    y_offset = sprite_size as u16 - 1 - y_offset;
-                }
-
-                // Handle 8x16 sprites correctly
-                let tile_addr = if sprite_size == 16 {
-                    // Bit 0 selects the pattern table bank ($0000 or $1000)
-                    let bank = (tile_num as u16 & 0x01) * 0x1000;
-                    // Bits 7-1 are the tile index; top half is tile, bottom half is tile + 1
-                    let tile_index = (tile_num & 0xFE) as u16 + (y_offset / 8);
-                    bank + (tile_index * 16) + (y_offset % 8)
-                } else {
-                    // Standard 8x8 behavior
-                    let bank = self.ctrl.sprt_pattern_addr();
-                    bank + (tile_num as u16 * 16) + y_offset
-                };
-
-                let tile_low = rom.read_chr(tile_addr);
-                let tile_high = rom.read_chr(tile_addr + 8);
-
-                for pixel in 0..8 {
-                    let bit = if flip_h { pixel } else { 7 - pixel };
-                    let color_bits = ((tile_high >> bit) & 1) << 1 | ((tile_low >> bit) & 1);
-
-                    if color_bits == 0 {
-                        continue;
-                    }
-
-                    let screen_x = sprite_x + pixel;
-                    if screen_x < 8 && !self.mask.show_leftmost_sprites() {
-                        continue;
-                    }
-                    if screen_x < 256 && self.sprite_scanline[screen_x].is_none() {
-                        let palette_value = 16 + palette_idx * 4 + color_bits;
-                        self.sprite_scanline[screen_x] =
-                            Some((palette_value, priority, is_sprite_0));
-                    }
-                }
-            }
-        }
-
-        // Merge buffers and detect sprite 0 hit
-        let mut sprite_0_hit = false;
-        for x in 0..256 {
-            let bg_palette_idx = self.bg_scanline[x];
-            let sprite_pixel = self.sprite_scanline[x];
-
-            let final_palette_idx = match sprite_pixel {
-                Some((sprite_pal_idx, priority, is_sprite_0)) => {
-                    if is_sprite_0 && bg_palette_idx != 0 && sprite_pal_idx != 0 {
-                        if x != 255 && self.mask.show_background() && self.mask.show_sprites() {
-                            sprite_0_hit = true;
-                        }
-                    }
-
-                    if bg_palette_idx == 0 {
-                        sprite_pal_idx
-                    } else if priority {
-                        bg_palette_idx
-                    } else {
-                        sprite_pal_idx
-                    }
-                }
-                None => bg_palette_idx,
-            };
-
-            let rgb = if final_palette_idx == 0 {
-                palette::SYSTEM_PALETTE[self.palette_table[0] as usize]
-            } else {
-                palette::SYSTEM_PALETTE[self.palette_table[final_palette_idx as usize] as usize]
-            };
-
-            let offset = (self.scanline as usize * 256 + x) * 3;
-            if offset + 2 < self.frame_buffer.len() {
-                self.frame_buffer[offset] = rgb.0;
-                self.frame_buffer[offset + 1] = rgb.1;
-                self.frame_buffer[offset + 2] = rgb.2;
-            }
-        }
-
-        if sprite_0_hit && !self.status.contains(StatusRegister::SPRITE_ZERO_HIT) {
-            self.status.set(StatusRegister::SPRITE_ZERO_HIT, true);
+            odd_frame: false,
         }
     }
 
     pub fn tick(&mut self, rom: &mut Rom, cycles: u8) {
-        self.cycles += cycles as usize;
-        self.handle_cycle_activity(rom, cycles);
-        // Check if we've completed a scanline
-        if self.cycles >= 341 {
-            // Handle end-of-scanline operations for visible scanlines
-            if self.scanline < 240 {
-                if self.mask.show_background() || self.mask.show_sprites() {
-                    // Increment Y at end of visible scanline
-                    self.internal.increment_y();
-                    // Copy horizontal scroll from t to v
-                    self.internal.copy_horizontal();
-                }
-                // Render the completed scanline
-                self.render_scanline(rom);
-            }
-            // Handle Pre-render vertical scroll copy (Keep this at cycle 341 is fine for now)
-            if self.scanline == 261 && (self.mask.show_background() || self.mask.show_sprites()) {
-                self.internal.copy_vertical();
-            }
+        for _ in 0..cycles {
+            let rendering_enabled = self.mask.show_background() || self.mask.show_sprites();
+            let visible_scanline = self.scanline < 240;
+            let pre_render_scanline = self.scanline == 261;
 
-            self.cycles -= 341;
-            self.scanline += 1;
-
-            if self.scanline == 261 {
+            if pre_render_scanline && self.cycles == 1 {
                 self.status.remove(StatusRegister::VBLANK_STARTED);
                 self.status.set(StatusRegister::SPRITE_ZERO_HIT, false);
                 self.status.remove(StatusRegister::SPRITE_OVERFLOW);
             }
 
-            if self.scanline == 241 {
-                self.status.set(StatusRegister::VBLANK_STARTED, true);
-                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
-                    self.nmi_interrupt = Some(1);
+            if rendering_enabled {
+                if visible_scanline || pre_render_scanline {
+                    // Emulate sprite evaluation
+                    if visible_scanline && self.cycles == 0 {
+                        self.evaluate_sprites(rom);
+                    }
+
+                    // Background Rendering & Shifting
+                    if (self.cycles >= 1 && self.cycles <= 256)
+                        || (self.cycles >= 321 && self.cycles <= 336)
+                    {
+                        // Shift registers every cycle
+                        self.update_shifters();
+
+                        // Perform Fetch Pipeline (Every 8 cycles)
+                        match (self.cycles - 1) % 8 {
+                            0 => {
+                                // Load the shifters with the previous tile's data
+                                self.load_bg_shifters();
+
+                                // Fetch Nametable Byte
+                                let v = self.internal.get_v();
+                                let addr = 0x2000 | (v & 0x0FFF);
+                                self.bg_nt_id = self.peek_vram(rom, addr);
+                            }
+                            2 => {
+                                // Fetch Attribute Byte
+                                let v = self.internal.get_v();
+                                let addr =
+                                    0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
+                                let shift = ((v >> 4) & 4) | (v & 2);
+                                self.bg_nt_attrib = (self.peek_vram(rom, addr) >> shift) & 3;
+                            }
+                            4 => {
+                                // Fetch Pattern Table Low
+                                let addr = self.ctrl.bknd_pattern_addr()
+                                    + (self.bg_nt_id as u16 * 16)
+                                    + self.internal.fine_y() as u16;
+                                self.bg_nt_lsb = rom.read_chr(addr);
+                            }
+                            6 => {
+                                // Fetch Pattern Table High
+                                let addr = self.ctrl.bknd_pattern_addr()
+                                    + (self.bg_nt_id as u16 * 16)
+                                    + self.internal.fine_y() as u16
+                                    + 8;
+                                self.bg_nt_msb = rom.read_chr(addr);
+                            }
+                            7 => {
+                                // Increment Coarse X
+                                if rendering_enabled {
+                                    self.internal.increment_x();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Increment Y
+                    if self.cycles == 256 {
+                        self.internal.increment_y();
+                    }
+
+                    // Reset X (Copy horizontal scroll bits)
+                    if self.cycles == 257 {
+                        self.load_bg_shifters();
+                        self.internal.copy_horizontal();
+                    }
+
+                    // Pre-render Only: Reset Y (Copy vertical scroll bits)
+                    if pre_render_scanline && self.cycles >= 280 && self.cycles <= 304 {
+                        self.internal.copy_vertical();
+                    }
+
+                    if (self.cycles >= 1 && self.cycles <= 256)
+                        || (self.cycles >= 321 && self.cycles <= 336)
+                    {
+                        // BG fetches
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    } else if self.cycles >= 257 && self.cycles <= 320 {
+                        // Sprite fetches
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                    }
                 }
             }
 
-            if self.scanline >= 262 {
-                self.scanline = 0;
-                self.nmi_interrupt = None;
+            if visible_scanline && self.cycles >= 1 && self.cycles <= 256 {
+                self.draw_pixel_cycle((self.cycles - 1) as usize, rom);
+            }
+
+            self.cycles += 1;
+            if self.scanline == 261
+                && self.cycles == 339
+                && self.odd_frame
+                && self.mask.show_background()
+            {
+                self.cycles = 340; // Skip cycle 339, jump straight to end
+            }
+
+            if self.cycles >= 341 {
+                self.cycles = 0;
+                self.scanline += 1;
+
+                if self.scanline == 241 {
+                    self.status.set(StatusRegister::VBLANK_STARTED, true);
+                    if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
+                        self.nmi_interrupt = Some(1);
+                    }
+                }
+
+                if self.scanline >= 262 {
+                    self.scanline = 0;
+                    self.nmi_interrupt = None;
+                    self.odd_frame = !self.odd_frame; // Toggle frame parity
+                }
             }
         }
     }
 
-    pub fn poll_nmi_interrupt(&mut self) -> Option<u8> {
-        self.nmi_interrupt.take()
+    fn load_bg_shifters(&mut self) {
+        self.bg_pattern_lo = (self.bg_pattern_lo & 0xFF00) | self.bg_nt_lsb as u16;
+        self.bg_pattern_hi = (self.bg_pattern_hi & 0xFF00) | self.bg_nt_msb as u16;
+
+        let attr = self.bg_nt_attrib;
+        self.bg_attrib_lo = (self.bg_attrib_lo & 0xFF00) | (if (attr & 1) > 0 { 0xFF } else { 0 });
+        self.bg_attrib_hi = (self.bg_attrib_hi & 0xFF00) | (if (attr & 2) > 0 { 0xFF } else { 0 });
+    }
+
+    fn update_shifters(&mut self) {
+        if self.mask.show_background() {
+            self.bg_pattern_lo <<= 1;
+            self.bg_pattern_hi <<= 1;
+            self.bg_attrib_lo <<= 1;
+            self.bg_attrib_hi <<= 1;
+        }
+    }
+
+    fn draw_pixel_cycle(&mut self, x: usize, _rom: &mut Rom) {
+        let mut bg_pixel = 0;
+        let mut bg_palette = 0;
+
+        // 1. Resolve Background Pixel
+        if self.mask.show_background() {
+            let bit_mux = 0x8000 >> self.internal.fine_x();
+
+            let p0 = (self.bg_pattern_lo & bit_mux) > 0;
+            let p1 = (self.bg_pattern_hi & bit_mux) > 0;
+            bg_pixel = (if p1 { 2 } else { 0 }) | (if p0 { 1 } else { 0 });
+
+            let pal0 = (self.bg_attrib_lo & bit_mux) > 0;
+            let pal1 = (self.bg_attrib_hi & bit_mux) > 0;
+            bg_palette = (if pal1 { 2 } else { 0 }) | (if pal0 { 1 } else { 0 });
+        }
+
+        // Left-most 8px masking
+        if x < 8 && !self.mask.show_leftmost_background() {
+            bg_pixel = 0;
+        }
+
+        // 2. Resolve Sprite Pixel (from pre-calculated buffer)
+        let sprite_data = if self.mask.show_sprites() {
+            if x < 8 && !self.mask.show_leftmost_sprites() {
+                None
+            } else {
+                self.sprite_scanline[x]
+            }
+        } else {
+            None
+        };
+
+        // 3. Priority Mux & Sprite 0 Hit
+        let (final_pixel, final_palette) = match sprite_data {
+            Some((spr_pal, priority, is_sprite_0)) => {
+                // Check Sprite 0 Hit: Opaque BG + Opaque Sprite 0 + Rendering Enabled + Not x=255
+                if is_sprite_0 && bg_pixel != 0 {
+                    if x != 255 && self.mask.show_background() && self.mask.show_sprites() {
+                        self.status.set(StatusRegister::SPRITE_ZERO_HIT, true);
+                    }
+                }
+
+                if priority {
+                    // Priority 1 = Behind BG
+                    if bg_pixel != 0 {
+                        (bg_pixel, bg_palette)
+                    } else {
+                        (spr_pal & 0x03, (spr_pal >> 2) & 0x03)
+                    }
+                } else {
+                    // Priority 0 = In front of BG
+                    if (spr_pal & 0x03) != 0 {
+                        (spr_pal & 0x03, (spr_pal >> 2) & 0x03)
+                    } else {
+                        (bg_pixel, bg_palette)
+                    }
+                }
+            }
+            None => (bg_pixel, bg_palette),
+        };
+
+        // 4. Write to Framebuffer
+        let final_color_idx = if final_pixel == 0 {
+            self.read_palette(0) // Universal background
+        } else {
+            let base =
+                if sprite_data.is_some() && (sprite_data.unwrap().1 == false || bg_pixel == 0) {
+                    0x10 // Sprite base
+                } else {
+                    0x00 // BG base
+                };
+            self.read_palette(base + final_palette * 4 + final_pixel)
+        };
+
+        let rgb = palette::SYSTEM_PALETTE[final_color_idx as usize];
+        let offset = (self.scanline as usize * 256 + x) * 3;
+        if offset + 2 < self.frame_buffer.len() {
+            self.frame_buffer[offset] = rgb.0;
+            self.frame_buffer[offset + 1] = rgb.1;
+            self.frame_buffer[offset + 2] = rgb.2;
+        }
+    }
+
+    fn evaluate_sprites(&mut self, rom: &mut Rom) {
+        self.sprite_scanline.fill(None);
+        let sprite_size = self.ctrl.sprite_size();
+
+        for sprite_idx in (0..64).rev() {
+            let oam_offset = sprite_idx * 4;
+            let sprite_y = self.oam_data[oam_offset] as u16;
+
+            // Check if sprite is on this scanline
+            if self.scanline < sprite_y || self.scanline >= sprite_y + sprite_size as u16 {
+                continue;
+            }
+
+            let tile_num = self.oam_data[oam_offset + 1];
+            let attributes = self.oam_data[oam_offset + 2];
+            let sprite_x = self.oam_data[oam_offset + 3] as usize;
+
+            let palette_idx = attributes & 0b11;
+            let priority = (attributes >> 5) & 1 == 1; // 1 = Behind BG
+            let flip_h = (attributes >> 6) & 1 == 1;
+            let flip_v = (attributes >> 7) & 1 == 1;
+            let is_sprite_0 = sprite_idx == 0;
+
+            let mut y_offset = self.scanline - sprite_y;
+            if flip_v {
+                y_offset = sprite_size as u16 - 1 - y_offset;
+            }
+
+            // Address calc
+            let tile_addr = if sprite_size == 16 {
+                let bank = (tile_num as u16 & 0x01) * 0x1000;
+                let tile_index = (tile_num & 0xFE) as u16 + (y_offset / 8);
+                bank + (tile_index * 16) + (y_offset % 8)
+            } else {
+                let bank = self.ctrl.sprt_pattern_addr();
+                bank + (tile_num as u16 * 16) + y_offset
+            };
+
+            let tile_low = rom.read_chr(tile_addr);
+            let tile_high = rom.read_chr(tile_addr + 8);
+
+            for pixel in 0..8 {
+                let bit = if flip_h { pixel } else { 7 - pixel };
+                let color_bits = ((tile_high >> bit) & 1) << 1 | ((tile_low >> bit) & 1);
+
+                if color_bits == 0 {
+                    continue;
+                }
+
+                let screen_x = sprite_x + pixel;
+                if screen_x < 256 {
+                    let val = 0x10 | (palette_idx << 2) | color_bits;
+                    self.sprite_scanline[screen_x] = Some((val, priority, is_sprite_0));
+                }
+            }
+        }
+    }
+
+    fn read_palette(&self, idx: u8) -> u8 {
+        let addr = 0x3F00 + (idx as u16);
+        let mirror = if (addr & 0x0003) == 0 {
+            addr & 0x3F0F
+        } else {
+            addr
+        };
+        let table_idx = match mirror {
+            0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => mirror - 0x3F10,
+            _ => (mirror - 0x3F00) & 0x1F,
+        };
+        self.palette_table[table_idx as usize]
+    }
+
+    fn handle_a12_check(&mut self, rom: &mut Rom, addr: u16) {
+        self.update_a12(addr, rom);
+    }
+
+    pub fn update_a12(&mut self, addr: u16, rom: &mut Rom) {
+        let a12 = (addr & 0x1000) != 0;
+        if a12 != self.a12_state {
+            if !a12 {
+                self.a12lo_period = 0;
+            } else {
+                if self.a12lo_period >= 15 {
+                    rom.clock_scanline_irq();
+                }
+            }
+        } else if !a12 {
+            self.a12lo_period += 2;
+        }
+        self.a12_state = a12;
     }
 
     pub fn write_to_ctrl(&mut self, value: u8) {
@@ -310,43 +421,35 @@ impl PPU {
     pub fn read_mask(&self) -> u8 {
         self.mask.bits()
     }
-
     pub fn write_to_mask(&mut self, value: u8) {
         self.mask.update(value);
     }
-
     pub fn read_status(&mut self) -> u8 {
         let data = self.status.bits();
         self.status.remove(StatusRegister::VBLANK_STARTED);
         self.internal.reset_latch();
         data
     }
-
     pub fn write_to_oam_addr(&mut self, value: u8) {
         self.oam_addr = value;
     }
-
     pub fn write_to_oam_data(&mut self, value: u8) {
         self.oam_data[self.oam_addr as usize] = value;
         self.oam_addr = self.oam_addr.wrapping_add(1);
     }
-
     pub fn read_oam_data(&self) -> u8 {
         self.oam_data[self.oam_addr as usize]
     }
-
     pub fn write_to_scroll(&mut self, value: u8) {
         self.internal.write_scroll(value);
     }
-
     pub fn write_to_ppu_addr(&mut self, _rom: &mut Rom, value: u8) {
         self.internal.write_addr(value);
     }
 
     pub fn read_data(&mut self, rom: &mut Rom) -> u8 {
         let addr = self.internal.get_v();
-        self.increment_vram_addr(rom);
-
+        self.internal.increment_v(self.ctrl.vram_addr_increment());
         match addr {
             0..=0x3EFF => {
                 let result = self.internal_data_buf;
@@ -364,7 +467,7 @@ impl PPU {
     pub fn write_data(&mut self, rom: &mut Rom, val: u8) {
         let addr = self.internal.get_v();
         self.write_vram(rom, addr, val);
-        self.increment_vram_addr(rom);
+        self.internal.increment_v(self.ctrl.vram_addr_increment());
     }
 
     pub fn write_oam_dma(&mut self, data: &[u8; 256]) {
@@ -376,7 +479,7 @@ impl PPU {
 
     fn read_vram(&mut self, rom: &mut Rom, addr: u16) -> u8 {
         let addr = addr & 0x3FFF;
-        self.update_a12(addr, rom);
+        self.handle_a12_check(rom, addr);
 
         match addr {
             0x0000..=0x1FFF => rom.read_chr(addr),
@@ -399,8 +502,6 @@ impl PPU {
 
     fn write_vram(&mut self, rom: &mut Rom, addr: u16, val: u8) {
         let addr = addr & 0x3FFF;
-        self.update_a12(addr, rom);
-
         match addr {
             0x0000..=0x1FFF => {
                 rom.write_chr(addr, val);
@@ -463,59 +564,6 @@ impl PPU {
             }
             0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
             _ => 0,
-        }
-    }
-
-    fn handle_cycle_activity(&mut self, rom: &mut Rom, cycles: u8) {
-        for _ in 0..cycles {
-            if !self.mask.show_background() && !self.mask.show_sprites() {
-                continue;
-            }
-            // See: https://www.nesdev.org/wiki/PPU_rendering#Line-by-line_timing
-            match self.scanline {
-                0..=239 | 261 => {
-                    match self.cycles {
-                        // 1. Visible Cycle Fetches (1-256) & Prefetch (321-336)
-                        // Pattern: NT(L), AT(L), TileLow(H?), TileHigh(H?)
-                        1..=256 | 321..=336 => {
-                            let phase = self.cycles % 8;
-                            match phase {
-                                1 | 2 => {
-                                    // Nametable Fetch (A12 is always LOW for $2000-$2FFF)
-                                    self.update_a12(0x2000, rom);
-                                }
-                                3 | 4 => {
-                                    // Attribute Fetch (A12 is always LOW)
-                                    self.update_a12(0x23C0, rom);
-                                }
-                                5 | 6 => {
-                                    // BG Tile Low (A12 depends on BG Control Bit)
-                                    self.update_a12(self.ctrl.bknd_pattern_addr(), rom);
-                                }
-                                0 | 7 => {
-                                    // BG Tile High (A12 depends on BG Control Bit)
-                                    self.update_a12(self.ctrl.bknd_pattern_addr(), rom);
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        // 2. Sprite Fetches (257-320)
-                        // PPU fetches 8 sprites. If using $1000 for sprites, A12 stays HIGH here.
-                        257..=320 => {
-                            self.update_a12(self.ctrl.sprt_pattern_addr(), rom);
-                        }
-
-                        // 3. Unused Nametable Fetches (337-340)
-                        // These are crucial "dummy" reads that set A12 LOW at the end of the line.
-                        337..=340 => {
-                            self.update_a12(0x2000, rom);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
         }
     }
 }

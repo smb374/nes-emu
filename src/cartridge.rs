@@ -169,11 +169,20 @@ impl Rom {
         }
     }
 
-    pub fn write_prg(&mut self, addr: u16, val: u8) {
+    // Update write_prg to handle Bus Conflicts:
+    pub fn write_prg(&mut self, addr: u16, mut val: u8) {
+        // BUS CONFLICT SIMULATION
+        // Discrete logic mappers (AxROM, UxROM, CNROM, etc.) expose the ROM to the bus during writes.
+        match self.mapper {
+            MapperType::AxROM(_) | MapperType::UxROM(_) | MapperType::CNROM(_) => {
+                let rom_val = self.read_prg_rom(addr);
+                val &= rom_val;
+            }
+            _ => {}
+        }
+
         match addr {
-            // PRG-RAM - delegated to mapper
             0x6000..=0x7FFF => self.mapper.write_prg_ram(addr, val),
-            // Mapper registers
             0x8000..=0xFFFF => self.write_mapper_register(addr, val),
             _ => {}
         }
@@ -302,13 +311,11 @@ impl Rom {
             }
 
             MapperType::AxROM(ref mut state) => {
-                // Bits 0-2: PRG bank select
                 state.prg_bank = val & 0x07;
-                // Bit 4: Nametable select
-                state.mirroring = if (val & 0x10) != 0 {
-                    Mirroring::SingleScreenUpper
-                } else {
+                state.mirroring = if (val & 0x10) == 0 {
                     Mirroring::SingleScreenLower
+                } else {
+                    Mirroring::SingleScreenUpper
                 };
             }
 
