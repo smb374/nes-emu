@@ -154,6 +154,10 @@ pub struct MMC1State {
 impl MMC1State {
     pub fn new(mapper: u8, prg_pages: u8, chr_pages: u8) -> Self {
         let subtype = Self::detect_subtype(prg_pages, chr_pages);
+        eprintln!(
+            "prg_pages={}, chr_pages={}, subtype={:?}",
+            prg_pages, chr_pages, subtype
+        );
 
         Self {
             shift_register: 0,
@@ -179,7 +183,7 @@ impl MMC1State {
         if prg_pages >= 8 {
             if chr_pages == 1 {
                 return MMC1Subtype::Sxrom;
-            } else if chr_pages >= 2 {
+            } else if chr_pages >= 2 && chr_pages <= 8 {
                 return MMC1Subtype::Szrom;
             }
         }
