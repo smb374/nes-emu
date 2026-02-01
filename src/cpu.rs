@@ -114,9 +114,10 @@ impl<'a> CPU<'a> {
             self.pc += 1;
             let pc_cache = self.pc;
             if let Some(op) = OPS[opcode as usize] {
-                self.run_op(op);
-                self.cycles += op.cycles as usize;
-                let (irq_sig, exit) = self.bus.tick(op.cycles);
+                let extra_cycles = self.run_op(op);
+                let cycles = op.cycles + extra_cycles;
+                self.cycles += cycles as usize;
+                let (irq_sig, exit) = self.bus.tick(cycles);
                 if exit {
                     break;
                 }
@@ -186,12 +187,21 @@ impl<'a> CPU<'a> {
         self.status.set(CpuFlags::NEGATIVE, val & 0x80 != 0);
     }
 
-    fn branch_if(&mut self, condition: bool) {
+    fn branch_if(&mut self, condition: bool) -> u8 {
         let offset = self.read_u8(self.pc) as i8 as i16;
         if condition {
-            self.pc = self.pc.wrapping_add(1).wrapping_add(offset as u16);
+            let old_pc = self.pc.wrapping_add(1);
+            let new_pc = old_pc.wrapping_add(offset as u16);
+            self.pc = new_pc;
+            // +1 for branch taken, +1 more if page crossed
+            if Self::page_crossed(old_pc, new_pc) {
+                2
+            } else {
+                1
+            }
         } else {
             self.pc += 1;
+            0
         }
     }
 
@@ -200,48 +210,67 @@ impl<'a> CPU<'a> {
         (a & 0xFF00) != (b & 0xFF00)
     }
 
-    pub fn operand_addr(&mut self, mode: Option<AddressMode>) -> Option<u16> {
-        let res = mode.and_then(|m| match m {
-            IMM => Some(self.pc),
-            ZP => Some(self.read_u8(self.pc) as u16),
-            ZPX => Some(self.read_u8(self.pc).wrapping_add(self.reg_x) as u16),
-            ZPY => Some(self.read_u8(self.pc).wrapping_add(self.reg_y) as u16),
-            ABS => Some(self.read_u16(self.pc)),
-            ABSX => Some(self.read_u16(self.pc).wrapping_add(self.reg_x as u16)),
-            ABSY => Some(self.read_u16(self.pc).wrapping_add(self.reg_y as u16)),
-            IND => {
-                let addr = self.read_u16(self.pc);
-                // 6502 bug: if address is $xxFF, high byte wraps to $xx00
-                if addr & 0xFF == 0xFF {
-                    let lo = self.read_u8(addr);
-                    let hi = self.read_u8(addr & 0xFF00); // Wrap to same page
-                    Some((hi as u16) << 8 | lo as u16)
-                } else {
-                    Some(self.read_u16(addr))
+    pub fn operand_addr(&mut self, mode: Option<AddressMode>) -> (Option<u16>, bool) {
+        match mode {
+            Some(m) => match m {
+                IMM => (Some(self.pc), false),
+                ZP => (Some(self.read_u8(self.pc) as u16), false),
+                ZPX => (
+                    Some(self.read_u8(self.pc).wrapping_add(self.reg_x) as u16),
+                    false,
+                ),
+                ZPY => (
+                    Some(self.read_u8(self.pc).wrapping_add(self.reg_y) as u16),
+                    false,
+                ),
+                ABS => (Some(self.read_u16(self.pc)), false),
+                ABSX => {
+                    let base = self.read_u16(self.pc);
+                    let addr = base.wrapping_add(self.reg_x as u16);
+                    (Some(addr), Self::page_crossed(base, addr))
                 }
-            }
-            INDX => {
-                let ptr = self.read_u8(self.pc).wrapping_add(self.reg_x);
-                let lo = self.read_u8(ptr as u16);
-                let hi = self.read_u8(ptr.wrapping_add(1) as u16);
-                Some((hi as u16) << 8 | lo as u16)
-            }
-            INDY => {
-                let ptr = self.read_u8(self.pc);
-                let lo = self.read_u8(ptr as u16);
-                let hi = self.read_u8(ptr.wrapping_add(1) as u16);
-                Some(((hi as u16) << 8 | lo as u16).wrapping_add(self.reg_y as u16))
-            }
-            _ => None,
-        });
-
-        res
+                ABSY => {
+                    let base = self.read_u16(self.pc);
+                    let addr = base.wrapping_add(self.reg_y as u16);
+                    (Some(addr), Self::page_crossed(base, addr))
+                }
+                IND => {
+                    let addr = self.read_u16(self.pc);
+                    // 6502 bug: if address is $xxFF, high byte wraps to $xx00
+                    let result = if addr & 0xFF == 0xFF {
+                        let lo = self.read_u8(addr);
+                        let hi = self.read_u8(addr & 0xFF00); // Wrap to same page
+                        (hi as u16) << 8 | lo as u16
+                    } else {
+                        self.read_u16(addr)
+                    };
+                    (Some(result), false)
+                }
+                INDX => {
+                    let ptr = self.read_u8(self.pc).wrapping_add(self.reg_x);
+                    let lo = self.read_u8(ptr as u16);
+                    let hi = self.read_u8(ptr.wrapping_add(1) as u16);
+                    (Some((hi as u16) << 8 | lo as u16), false)
+                }
+                INDY => {
+                    let ptr = self.read_u8(self.pc);
+                    let lo = self.read_u8(ptr as u16);
+                    let hi = self.read_u8(ptr.wrapping_add(1) as u16);
+                    let base = (hi as u16) << 8 | lo as u16;
+                    let addr = base.wrapping_add(self.reg_y as u16);
+                    (Some(addr), Self::page_crossed(base, addr))
+                }
+                _ => (None, false),
+            },
+            None => (None, false),
+        }
     }
 
-    fn run_op(&mut self, op: Op) {
+    fn run_op(&mut self, op: Op) -> u8 {
         match op.family {
             ADC => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
                 let sum = self.reg_a as u16 + val as u16 + car;
@@ -256,11 +285,24 @@ impl<'a> CPU<'a> {
 
                 self.reg_a = result;
                 self.update_nz(self.reg_a);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             AND => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_a &= self.read_u8(addr);
                 self.update_nz(self.reg_a);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             ASL => {
                 if op.mode == Some(ACC) {
@@ -268,24 +310,33 @@ impl<'a> CPU<'a> {
                     self.reg_a <<= 1;
                     self.update_nz(self.reg_a);
                 } else {
-                    let addr = self.operand_addr(op.mode).unwrap();
+                    let (addr_opt, _) = self.operand_addr(op.mode);
+                    let addr = addr_opt.unwrap();
                     let mut val = self.read_u8(addr);
                     self.status.set(CpuFlags::CARRY, (val & 0x80) != 0);
                     val <<= 1;
                     self.update_nz(val);
                     self.write_u8(addr, val);
                 }
+                0
             }
             BCC => self.branch_if(!self.status.contains(CpuFlags::CARRY)),
             BCS => self.branch_if(self.status.contains(CpuFlags::CARRY)),
             BEQ => self.branch_if(self.status.contains(CpuFlags::ZERO)),
             BIT => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 let res = self.reg_a & val;
                 self.status.set(CpuFlags::ZERO, res == 0);
                 self.status.set(CpuFlags::OVERFLOW, (val & 0x40) != 0);
                 self.status.set(CpuFlags::NEGATIVE, (val & 0x80) != 0);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             BMI => self.branch_if(self.status.contains(CpuFlags::NEGATIVE)),
             BNE => self.branch_if(!self.status.contains(CpuFlags::ZERO)),
@@ -295,83 +346,159 @@ impl<'a> CPU<'a> {
                 self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
                 self.status.insert(CpuFlags::INTR_DISABLE);
                 self.pc = self.read_u16(0xFFFE);
+                0
             }
             BVC => self.branch_if(!self.status.contains(CpuFlags::OVERFLOW)),
             BVS => self.branch_if(self.status.contains(CpuFlags::OVERFLOW)),
-            CLC => self.status &= !CpuFlags::CARRY,
-            CLD => self.status &= !CpuFlags::DECIMAL,
-            CLI => self.status &= !CpuFlags::INTR_DISABLE,
-            CLV => self.status &= !CpuFlags::OVERFLOW,
+            CLC => {
+                self.status &= !CpuFlags::CARRY;
+                0
+            }
+            CLD => {
+                self.status &= !CpuFlags::DECIMAL;
+                0
+            }
+            CLI => {
+                self.status &= !CpuFlags::INTR_DISABLE;
+                0
+            }
+            CLV => {
+                self.status &= !CpuFlags::OVERFLOW;
+                0
+            }
             CMP => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let (res, car) = self.reg_a.overflowing_sub(self.read_u8(addr));
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             CPX => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let (res, car) = self.reg_x.overflowing_sub(self.read_u8(addr));
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             CPY => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let (res, car) = self.reg_y.overflowing_sub(self.read_u8(addr));
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             DEC => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let res = self.read_u8(addr).wrapping_sub(1);
                 self.write_u8(addr, res);
                 self.update_nz(res);
+                0
             }
             DEX => {
                 self.reg_x = self.reg_x.wrapping_sub(1);
                 self.update_nz(self.reg_x);
+                0
             }
             DEY => {
                 self.reg_y = self.reg_y.wrapping_sub(1);
                 self.update_nz(self.reg_y);
+                0
             }
             EOR => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_a ^= self.read_u8(addr);
                 self.update_nz(self.reg_a);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             INC => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let res = self.read_u8(addr).wrapping_add(1);
                 self.write_u8(addr, res);
                 self.update_nz(res);
+                0
             }
             INX => {
                 self.reg_x = self.reg_x.wrapping_add(1);
                 self.update_nz(self.reg_x);
+                0
             }
             INY => {
                 self.reg_y = self.reg_y.wrapping_add(1);
                 self.update_nz(self.reg_y);
+                0
             }
-            JMP => self.pc = self.operand_addr(op.mode).unwrap(),
+            JMP => {
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                self.pc = addr_opt.unwrap();
+                0
+            }
             JSR => {
                 self.push_stack_u16(self.pc + 1);
-                self.pc = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                self.pc = addr_opt.unwrap();
+                0
             }
             LDA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_a = self.read_u8(addr);
                 self.update_nz(self.reg_a);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             LDX => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_x = self.read_u8(addr);
                 self.update_nz(self.reg_x);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             LDY => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_y = self.read_u8(addr);
                 self.update_nz(self.reg_y);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             LSR => {
                 if op.mode == Some(ACC) {
@@ -379,31 +506,48 @@ impl<'a> CPU<'a> {
                     self.reg_a >>= 1;
                     self.update_nz(self.reg_a);
                 } else {
-                    let addr = self.operand_addr(op.mode).unwrap();
+                    let (addr_opt, _) = self.operand_addr(op.mode);
+                    let addr = addr_opt.unwrap();
                     let mut val = self.read_u8(addr);
                     self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
                     val >>= 1;
                     self.update_nz(val);
                     self.write_u8(addr, val);
                 }
+                0
             }
-            NOP => {}
+            NOP => 0,
             ORA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_a |= self.read_u8(addr);
                 self.update_nz(self.reg_a);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
-            PHA => self.push_stack(self.reg_a),
-            PHP => self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits()),
+            PHA => {
+                self.push_stack(self.reg_a);
+                0
+            }
+            PHP => {
+                self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
+                0
+            }
             PLA => {
                 self.reg_a = self.pop_stack();
                 self.update_nz(self.reg_a);
+                0
             }
             PLP => {
                 let mut status = CpuFlags::from_bits_retain(self.pop_stack());
                 status &= !CpuFlags::BREAK;
                 status |= CpuFlags::BREAK2;
                 self.status = status;
+                0
             }
             ROL => {
                 let ocar = self.status.contains(CpuFlags::CARRY);
@@ -413,13 +557,15 @@ impl<'a> CPU<'a> {
                     self.reg_a = res;
                     self.update_nz(self.reg_a);
                 } else {
-                    let addr = self.operand_addr(op.mode).unwrap();
+                    let (addr_opt, _) = self.operand_addr(op.mode);
+                    let addr = addr_opt.unwrap();
                     let val = self.read_u8(addr);
                     let (res, car) = utils::rol(val, ocar);
                     self.status.set(CpuFlags::CARRY, car);
                     self.update_nz(res);
                     self.write_u8(addr, res);
                 }
+                0
             }
             ROR => {
                 let ocar = self.status.contains(CpuFlags::CARRY);
@@ -429,13 +575,15 @@ impl<'a> CPU<'a> {
                     self.reg_a = res;
                     self.update_nz(self.reg_a);
                 } else {
-                    let addr = self.operand_addr(op.mode).unwrap();
+                    let (addr_opt, _) = self.operand_addr(op.mode);
+                    let addr = addr_opt.unwrap();
                     let val = self.read_u8(addr);
                     let (res, car) = utils::ror(val, ocar);
                     self.status.set(CpuFlags::CARRY, car);
                     self.update_nz(res);
                     self.write_u8(addr, res);
                 }
+                0
             }
             RTI => {
                 let mut status = CpuFlags::from_bits_retain(self.pop_stack());
@@ -443,11 +591,16 @@ impl<'a> CPU<'a> {
                 status |= CpuFlags::BREAK2;
                 self.status = status;
                 self.pc = self.pop_stack_u16();
+                0
             }
-            RTS => self.pc = self.pop_stack_u16() + 1,
+            RTS => {
+                self.pc = self.pop_stack_u16() + 1;
+                0
+            }
             SBC => {
                 // ADC with inverted operand
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
                 let sum = self.reg_a as u16 + (val ^ 0xFF) as u16 + car;
@@ -462,58 +615,97 @@ impl<'a> CPU<'a> {
 
                 self.reg_a = res;
                 self.update_nz(self.reg_a);
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
-            SEC => self.status |= CpuFlags::CARRY,
-            SED => self.status |= CpuFlags::DECIMAL,
-            SEI => self.status |= CpuFlags::INTR_DISABLE,
+            SEC => {
+                self.status |= CpuFlags::CARRY;
+                0
+            }
+            SED => {
+                self.status |= CpuFlags::DECIMAL;
+                0
+            }
+            SEI => {
+                self.status |= CpuFlags::INTR_DISABLE;
+                0
+            }
             STA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.write_u8(addr, self.reg_a);
+                0
             }
             STX => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.write_u8(addr, self.reg_x);
+                0
             }
             STY => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.write_u8(addr, self.reg_y);
+                0
             }
             TAX => {
                 self.reg_x = self.reg_a;
                 self.update_nz(self.reg_x);
+                0
             }
             TAY => {
                 self.reg_y = self.reg_a;
                 self.update_nz(self.reg_y);
+                0
             }
             TSX => {
                 self.reg_x = self.sp;
                 self.update_nz(self.reg_x);
+                0
             }
             TXA => {
                 self.reg_a = self.reg_x;
                 self.update_nz(self.reg_a);
+                0
             }
-            TXS => self.sp = self.reg_x,
+            TXS => {
+                self.sp = self.reg_x;
+                0
+            }
             TYA => {
                 self.reg_a = self.reg_y;
                 self.update_nz(self.reg_a);
+                0
             }
             // Unofficial
             AAC => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_a &= self.read_u8(addr);
                 self.update_nz(self.reg_a);
                 self.status
                     .set(CpuFlags::CARRY, self.status.contains(CpuFlags::NEGATIVE));
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             AAX => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let res = self.reg_a & self.reg_x;
                 self.write_u8(addr, res);
+                0
             }
             ARR => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 let (res, _) = utils::ror(self.reg_a & val, self.status.contains(CpuFlags::CARRY));
                 self.reg_a = res;
@@ -536,45 +728,82 @@ impl<'a> CPU<'a> {
                     }
                     _ => unreachable!(),
                 }
+
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             ASR => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.reg_a & self.read_u8(addr);
                 self.reg_a = val >> 1;
                 self.update_nz(self.reg_a);
                 self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             ATX => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 self.reg_a &= self.read_u8(addr);
                 self.reg_x = self.reg_a;
                 self.update_nz(self.reg_a);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             AXA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let res = self.reg_a & self.reg_x & 7;
                 self.write_u8(addr, res);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             AXS => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 self.reg_x &= self.reg_a;
                 let sum = self.reg_x as u16 + (val ^ 0xFF) as u16 + 1;
                 self.status.set(CpuFlags::CARRY, sum > 0xFF);
                 self.reg_x = (sum & 0xFF) as u8;
                 self.update_nz(self.reg_x);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             DCP => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let res = self.read_u8(addr).wrapping_sub(1);
                 self.write_u8(addr, res);
                 let (res, car) = self.reg_a.overflowing_sub(res);
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
-            DOP => {}
+            DOP => 0,
             ISC => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr).wrapping_add(1);
                 self.write_u8(addr, val);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
@@ -590,27 +819,45 @@ impl<'a> CPU<'a> {
 
                 self.reg_a = res;
                 self.update_nz(self.reg_a);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             KIL => {
                 std::process::exit(0);
             }
             LAR => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 self.sp &= val;
                 self.reg_a = self.sp;
                 self.reg_x = self.sp;
                 self.update_nz(self.reg_a);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             LAX => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let val = self.read_u8(addr);
                 self.reg_a = val;
                 self.reg_x = val;
                 self.update_nz(val);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
             RLA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 {
                     let val = self.read_u8(addr);
                     let ocar = self.status.contains(CpuFlags::CARRY);
@@ -622,10 +869,16 @@ impl<'a> CPU<'a> {
                 {
                     self.reg_a &= self.read_u8(addr);
                     self.update_nz(self.reg_a);
+                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                        1
+                    } else {
+                        0
+                    }
                 }
             }
             RRA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 {
                     let ocar = self.status.contains(CpuFlags::CARRY);
                     let val = self.read_u8(addr);
@@ -649,10 +902,16 @@ impl<'a> CPU<'a> {
 
                     self.reg_a = result;
                     self.update_nz(self.reg_a);
+                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                        1
+                    } else {
+                        0
+                    }
                 }
             }
             SLO => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 {
                     let mut val = self.read_u8(addr);
                     self.status.set(CpuFlags::CARRY, (val & 0x80) != 0);
@@ -663,10 +922,16 @@ impl<'a> CPU<'a> {
                 {
                     self.reg_a |= self.read_u8(addr);
                     self.update_nz(self.reg_a);
+                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                        1
+                    } else {
+                        0
+                    }
                 }
             }
             SRE => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 {
                     let mut val = self.read_u8(addr);
                     self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
@@ -677,38 +942,60 @@ impl<'a> CPU<'a> {
                 {
                     self.reg_a ^= self.read_u8(addr);
                     self.update_nz(self.reg_a);
+                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                        1
+                    } else {
+                        0
+                    }
                 }
             }
             SXA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let hi = ((addr >> 8) as u8).wrapping_add(1);
                 let res = self.reg_x & hi;
                 self.write_u8(addr, res);
+                0
             }
             SYA => {
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, _) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let hi = ((addr >> 8) as u8).wrapping_add(1);
                 let res = self.reg_y & hi;
                 self.write_u8(addr, res);
+                0
             }
-            TOP => {}
+            TOP => 0,
             XAA => {
                 {
                     self.reg_a = self.reg_x;
                     self.update_nz(self.reg_a);
                 }
                 {
-                    let addr = self.operand_addr(op.mode).unwrap();
+                    let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                    let addr = addr_opt.unwrap();
                     self.reg_a &= self.read_u8(addr);
                     self.update_nz(self.reg_a);
+
+                    if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                        1
+                    } else {
+                        0
+                    }
                 }
             }
             XAS => {
                 self.sp = self.reg_x & self.reg_a;
-                let addr = self.operand_addr(op.mode).unwrap();
+                let (addr_opt, page_crossed) = self.operand_addr(op.mode);
+                let addr = addr_opt.unwrap();
                 let hi = ((addr >> 8) as u8).wrapping_add(1);
                 let res = self.sp & hi;
                 self.write_u8(addr, res);
+                if page_crossed && matches!(op.mode, Some(ABSX) | Some(ABSY) | Some(INDY)) {
+                    1
+                } else {
+                    0
+                }
             }
         }
     }

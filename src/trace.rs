@@ -20,6 +20,7 @@ pub fn trace(cpu: &mut CPU) -> String {
         Some(AddressMode::IMM) | None => (0, 0),
         _ => cpu
             .operand_addr(op.mode)
+            .0
             .map_or((0, 0), |addr| (addr, cpu.read_u8(addr))),
     };
 

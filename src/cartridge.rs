@@ -82,6 +82,7 @@ impl Rom {
                 header.chr_pages,
                 hardware_mirroring == Mirroring::FourScreen,
             )),
+            7 => MapperType::AxROM(AxROMState::new()),
             _ => {
                 return Err(format!(
                     "Mapper {} is not supported currently",
@@ -180,8 +181,8 @@ impl Rom {
 
     pub fn read_chr(&self, addr: u16) -> u8 {
         match self.mapper {
-            MapperType::NROM(_) | MapperType::UxROM(_) => {
-                // Direct access (UxROM uses CHR-RAM)
+            MapperType::NROM(_) | MapperType::UxROM(_) | MapperType::AxROM(_) => {
+                // Direct access (UxROM and AxROM use CHR-RAM)
                 let idx = (addr as usize) % self.chr_data.len();
                 self.chr_data[idx]
             }
@@ -263,6 +264,12 @@ impl Rom {
                 // Fixed 32KB PRG-ROM
                 self.prg_rom[(addr - 0x8000) as usize % self.prg_rom.len()]
             }
+            MapperType::AxROM(ref state) => {
+                // 32KB switchable bank at $8000-$FFFF
+                let bank_offset = (state.prg_bank as usize) * (PRG_ROM_PAGE_SIZE * 2);
+                let idx = bank_offset + (addr - 0x8000) as usize;
+                self.prg_rom[idx % self.prg_rom.len()]
+            }
             MapperType::MMC1(ref state) => {
                 let idx = (addr >> 14) & 0x1;
                 let offset = addr - (addr & 0xC000);
@@ -292,6 +299,17 @@ impl Rom {
             MapperType::CNROM(ref mut state) => {
                 // Direct CHR bank select
                 state.chr_bank = val & 0x03;
+            }
+
+            MapperType::AxROM(ref mut state) => {
+                // Bits 0-2: PRG bank select
+                state.prg_bank = val & 0x07;
+                // Bit 4: Nametable select
+                state.mirroring = if (val & 0x10) != 0 {
+                    Mirroring::SingleScreenUpper
+                } else {
+                    Mirroring::SingleScreenLower
+                };
             }
 
             MapperType::MMC1(ref mut state) => {

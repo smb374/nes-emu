@@ -8,6 +8,7 @@ pub enum MapperType {
     UxROM(UxROMState),
     CNROM(CNROMState),
     MMC3(MMC3State),
+    AxROM(AxROMState),
 }
 
 impl MapperType {
@@ -21,6 +22,7 @@ impl MapperType {
             } else {
                 Mirroring::Vertical
             }),
+            MapperType::AxROM(s) => Some(s.mirroring),
             _ => None, // Use hardware mirroring from ROM header
         }
     }
@@ -29,7 +31,7 @@ impl MapperType {
         match self {
             MapperType::NROM(state) => state.read_prg_ram(addr),
             MapperType::MMC1(state) => state.read_prg_ram(addr),
-            MapperType::UxROM(_) | MapperType::CNROM(_) => 0,
+            MapperType::UxROM(_) | MapperType::CNROM(_) | MapperType::AxROM(_) => 0,
             MapperType::MMC3(state) => state.read_prg_ram(addr),
         }
     }
@@ -38,14 +40,14 @@ impl MapperType {
         match self {
             MapperType::NROM(state) => state.write_prg_ram(addr, val),
             MapperType::MMC1(state) => state.write_prg_ram(addr, val),
-            MapperType::UxROM(_) | MapperType::CNROM(_) => {}
+            MapperType::UxROM(_) | MapperType::CNROM(_) | MapperType::AxROM(_) => {}
             MapperType::MMC3(state) => state.write_prg_ram(addr, val),
         }
     }
 
     pub fn has_prg_ram(&self) -> bool {
         match self {
-            MapperType::UxROM(_) | MapperType::CNROM(_) => false,
+            MapperType::UxROM(_) | MapperType::CNROM(_) | MapperType::AxROM(_) => false,
             _ => true,
         }
     }
@@ -55,7 +57,7 @@ impl MapperType {
             MapperType::NROM(state) => &state.prg_ram,
             MapperType::MMC1(state) => &state.prg_ram,
             MapperType::MMC3(state) => &state.prg_ram,
-            MapperType::UxROM(_) | MapperType::CNROM(_) => &[],
+            MapperType::UxROM(_) | MapperType::CNROM(_) | MapperType::AxROM(_) => &[],
         }
     }
 
@@ -76,7 +78,7 @@ impl MapperType {
                 state.prg_ram[..len].copy_from_slice(&data[..len]);
                 Ok(())
             }
-            MapperType::UxROM(_) | MapperType::CNROM(_) => {
+            MapperType::UxROM(_) | MapperType::CNROM(_) | MapperType::AxROM(_) => {
                 Err("Mapper does not have PRG-RAM".to_string())
             }
         }
@@ -337,6 +339,27 @@ impl CNROMState {
 }
 
 impl Default for CNROMState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxROMState {
+    pub prg_bank: u8,
+    pub mirroring: Mirroring,
+}
+
+impl AxROMState {
+    pub fn new() -> Self {
+        Self {
+            prg_bank: 0,
+            mirroring: Mirroring::SingleScreenLower,
+        }
+    }
+}
+
+impl Default for AxROMState {
     fn default() -> Self {
         Self::new()
     }
