@@ -317,14 +317,21 @@ impl PPU {
     fn evaluate_sprites(&mut self, rom: &mut Rom) {
         self.sprite_scanline.fill(None);
         let sprite_size = self.ctrl.sprite_size();
+        let mut sprite_count = 0;
 
         for sprite_idx in (0..64).rev() {
             let oam_offset = sprite_idx * 4;
             let sprite_y = self.oam_data[oam_offset] as u16;
 
             // Check if sprite is on this scanline
-            if self.scanline < sprite_y || self.scanline >= sprite_y + sprite_size as u16 {
+            if self.scanline < sprite_y + 1 || self.scanline >= sprite_y + 1 + sprite_size as u16 {
                 continue;
+            }
+
+            sprite_count += 1;
+            if sprite_count > 8 {
+                self.status.insert(StatusRegister::SPRITE_OVERFLOW);
+                // Continue processing to maintain compatibility, but flag is set
             }
 
             let tile_num = self.oam_data[oam_offset + 1];
@@ -337,7 +344,7 @@ impl PPU {
             let flip_v = (attributes >> 7) & 1 == 1;
             let is_sprite_0 = sprite_idx == 0;
 
-            let mut y_offset = self.scanline - sprite_y;
+            let mut y_offset = self.scanline - (sprite_y + 1);
             if flip_v {
                 y_offset = sprite_size as u16 - 1 - y_offset;
             }

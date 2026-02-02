@@ -170,17 +170,7 @@ impl Rom {
     }
 
     // Update write_prg to handle Bus Conflicts:
-    pub fn write_prg(&mut self, addr: u16, mut val: u8) {
-        // BUS CONFLICT SIMULATION
-        // Discrete logic mappers (AxROM, UxROM, CNROM, etc.) expose the ROM to the bus during writes.
-        match self.mapper {
-            MapperType::AxROM(_) | MapperType::UxROM(_) | MapperType::CNROM(_) => {
-                let rom_val = self.read_prg_rom(addr);
-                val &= rom_val;
-            }
-            _ => {}
-        }
-
+    pub fn write_prg(&mut self, addr: u16, val: u8) {
         match addr {
             0x6000..=0x7FFF => self.mapper.write_prg_ram(addr, val),
             0x8000..=0xFFFF => self.write_mapper_register(addr, val),
@@ -359,9 +349,9 @@ impl Rom {
                 }
                 0x8001 => {
                     match state.command {
-                        0 | 1 => state.banks[state.command as usize] = val & 0xFE,
-                        2..=5 => state.banks[state.command as usize] = val,
-                        6 | 7 => state.banks[state.command as usize] = val & 0x3F,
+                        0 | 1 => state.banks[state.command as usize] = val as u16 & 0xFE,
+                        2..=5 => state.banks[state.command as usize] = val as u16,
+                        6 | 7 => state.banks[state.command as usize] = val as u16 & 0x3F,
                         _ => unreachable!(),
                     }
                     state.map_pages();

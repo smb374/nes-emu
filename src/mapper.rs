@@ -179,7 +179,7 @@ impl MMC1State {
         if prg_pages >= 8 {
             if chr_pages == 1 {
                 return MMC1Subtype::Sxrom;
-            } else if chr_pages >= 2 {
+            } else if chr_pages >= 2 && chr_pages <= 8 {
                 return MMC1Subtype::Szrom;
             }
         }
@@ -367,9 +367,9 @@ impl Default for AxROMState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MMC3State {
-    pub banks: [u8; 8],
-    pub chr_map: [u8; 8], // 1KB banks
-    pub prg_map: [u8; 4], // 8KB banks
+    pub banks: [u16; 8],
+    pub chr_map: [u16; 8], // 1KB banks
+    pub prg_map: [u16; 4], // 8KB banks
     pub command: u8,
     pub chr_swap: bool,
     pub prg_swap: bool,
@@ -384,8 +384,8 @@ pub struct MMC3State {
     pub arr_select: bool,
     pub prg_ram_enable: bool,
     pub prg_ram_protect: bool,
-    pub prg_banks: u8,
-    pub chr_banks: u8,
+    pub prg_banks: u16,
+    pub chr_banks: u16,
     pub is_four_screen: bool,
 
     // PRG-RAM (8KB standard for MMC3)
@@ -394,10 +394,10 @@ pub struct MMC3State {
 
 impl MMC3State {
     pub fn new(prg_pages: u8, chr_pages: u8, is_four_screen: bool) -> Self {
-        let last_page = (prg_pages * 2) - 1;
+        let last_page = (prg_pages * 2) as u16 - 1;
         let banks = if chr_pages == 0 { 8 } else { chr_pages * 8 };
         Self {
-            banks: [0u8; 8],
+            banks: [0u16; 8],
             chr_map: [0, 1, 2, 3, 4, 5, 6, 7],
             prg_map: [0, 1, last_page - 1, last_page],
             command: 0,
@@ -410,8 +410,8 @@ impl MMC3State {
             arr_select: false,
             prg_ram_enable: true,
             prg_ram_protect: false,
-            prg_banks: prg_pages * 2,
-            chr_banks: banks,
+            prg_banks: last_page + 1,
+            chr_banks: banks as u16,
             is_four_screen,
             prg_ram: vec![0u8; PRG_RAM_8K].into_boxed_slice(),
         }
