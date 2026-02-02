@@ -395,7 +395,11 @@ pub struct MMC3State {
 impl MMC3State {
     pub fn new(prg_pages: u8, chr_pages: u8, is_four_screen: bool) -> Self {
         let last_page = (prg_pages * 2) as u16 - 1;
-        let banks = if chr_pages == 0 { 8 } else { chr_pages * 8 };
+        let banks = if chr_pages == 0 {
+            8
+        } else {
+            chr_pages as u16 * 8
+        };
         Self {
             banks: [0u16; 8],
             chr_map: [0, 1, 2, 3, 4, 5, 6, 7],
@@ -411,7 +415,7 @@ impl MMC3State {
             prg_ram_enable: true,
             prg_ram_protect: false,
             prg_banks: last_page + 1,
-            chr_banks: banks as u16,
+            chr_banks: banks,
             is_four_screen,
             prg_ram: vec![0u8; PRG_RAM_8K].into_boxed_slice(),
         }
