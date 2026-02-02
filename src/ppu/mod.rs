@@ -89,8 +89,15 @@ impl PPU {
 
             if pre_render_scanline && self.cycles == 1 {
                 self.status.remove(StatusRegister::VBLANK_STARTED);
-                self.status.set(StatusRegister::SPRITE_ZERO_HIT, false);
+                self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
                 self.status.remove(StatusRegister::SPRITE_OVERFLOW);
+            }
+
+            if self.scanline == 241 && self.cycles == 1 {
+                self.status.set(StatusRegister::VBLANK_STARTED, true);
+                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
+                    self.nmi_interrupt = Some(1);
+                }
             }
 
             if rendering_enabled {
@@ -195,13 +202,6 @@ impl PPU {
             if self.cycles >= 341 {
                 self.cycles = 0;
                 self.scanline += 1;
-
-                if self.scanline == 241 {
-                    self.status.set(StatusRegister::VBLANK_STARTED, true);
-                    if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
-                        self.nmi_interrupt = Some(1);
-                    }
-                }
 
                 if self.scanline >= 262 {
                     self.scanline = 0;
@@ -331,7 +331,7 @@ impl PPU {
             sprite_count += 1;
             if sprite_count > 8 {
                 self.status.insert(StatusRegister::SPRITE_OVERFLOW);
-                // Continue processing to maintain compatibility, but flag is set
+                break;
             }
 
             let tile_num = self.oam_data[oam_offset + 1];
