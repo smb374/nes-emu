@@ -182,6 +182,14 @@ impl PPU {
                     } else if self.cycles >= 257 && self.cycles <= 320 {
                         // Sprite fetches
                         self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                    } else if self.cycles >= 337 && self.cycles <= 340 {
+                        // Dummy NT fetches (2 more tiles)
+                        if (self.cycles - 1) % 2 == 0 {
+                            let v = self.internal.get_v();
+                            let addr = 0x2000 | (v & 0x0FFF);
+                            self.peek_vram(rom, addr); // Dummy read
+                            self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                        }
                     }
                 }
             }

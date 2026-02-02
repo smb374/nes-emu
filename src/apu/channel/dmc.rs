@@ -112,7 +112,7 @@ impl DMCChannel {
     }
 
     /// Clock the timer
-    pub fn clock_timer(&mut self, cycles: usize, rom: &mut Rom) -> usize {
+    pub fn clock_timer(&mut self, cycles: usize, rom: &mut Rom, oam_dma: bool) -> usize {
         let mut stall = 0;
         for _ in 0..cycles {
             // Timer
@@ -127,7 +127,16 @@ impl DMCChannel {
             if self.sample_buffer_empty && self.bytes_remaining > 0 {
                 // Read from CPU memory
                 self.sample_buffer = rom.read_prg(self.current_address);
-                stall += 4;
+
+                // DMC DMA timing: varies based on OAM DMA state
+                // - Normal: 4 cycles (1 dummy read + alignment + get)
+                // - During OAM DMA: 2 cycles (most common case - 1 for DMC get, 1 for OAM realignment)
+                let dmc_cycles = if oam_dma {
+                    2 // Reduced cycles when overlapping with OAM DMA
+                } else {
+                    4 // Normal case
+                };
+                stall += dmc_cycles;
                 self.sample_buffer_empty = false;
 
                 // Advance address with wrapping

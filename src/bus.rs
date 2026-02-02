@@ -48,6 +48,9 @@ pub struct Bus<'call> {
     ppu: PPU,
     apu: APU,
 
+    oam_dma: bool,
+    oam_dma_remain: u16,
+
     cycles: usize,
     cycles_acc: usize,
     joypad1: Joypad,
@@ -67,6 +70,8 @@ impl<'call> Bus<'call> {
             rom,
             ppu,
             apu,
+            oam_dma: false,
+            oam_dma_remain: 0,
 
             joypad1: Joypad::new(),
             joypad2: Joypad::new(),
@@ -82,7 +87,13 @@ impl<'call> Bus<'call> {
 
         let mut stall = 0;
         for _ in 0..cycles {
-            stall += self.apu.tick(&mut self.rom, 1);
+            if self.oam_dma_remain > 0 {
+                self.oam_dma_remain -= 1;
+                if self.oam_dma_remain == 0 {
+                    self.oam_dma = false;
+                }
+            }
+            stall += self.apu.tick(&mut self.rom, 1, self.oam_dma);
             let nmi_before = self.ppu.nmi_interrupt.is_some();
             self.ppu.tick(&mut self.rom, 3);
             let nmi_after = self.ppu.nmi_interrupt.is_some();
@@ -219,13 +230,16 @@ impl<'call> Mem for Bus<'call> {
             0x4014 => {
                 let mut buffer: [u8; 256] = [0; 256];
                 let hi: u16 = (data as u16) << 8;
+                let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
+                self.oam_dma = true;
+                self.oam_dma_remain = 512 + add_cycles;
+
                 for i in 0..256u16 {
                     buffer[i as usize] = self.read_u8(hi + i);
                     self.tick(2);
                 }
 
                 self.ppu.write_oam_dma(&buffer);
-                let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
                 self.tick(add_cycles);
             }
 

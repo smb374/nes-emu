@@ -65,7 +65,7 @@ impl APU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) -> usize {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u8, oam_dma: bool) -> usize {
         let cycles = cycles as usize;
         self.cycles += cycles;
 
@@ -74,7 +74,7 @@ impl APU {
         self.cycle_accumulator = total_cycles % 2;
 
         self.triag.clock_timer(cycles);
-        let stall = self.dmc.clock_timer(cycles, rom);
+        let stall = self.dmc.clock_timer(cycles, rom, oam_dma);
 
         if apu_ticks > 0 {
             self.pulse1.clock_timer(apu_ticks);
