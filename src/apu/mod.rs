@@ -293,6 +293,5 @@ impl APU {
 
         self.lpf14k
             .filter(self.hpf442.filter(self.hpf90.filter(output)))
-            * 1.5
     }
 }
