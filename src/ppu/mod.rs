@@ -290,7 +290,7 @@ impl PPU {
         let (final_pixel, final_palette) = match sprite_data {
             Some((spr_pal, priority, is_sprite_0)) => {
                 // Check Sprite 0 Hit: Opaque BG + Opaque Sprite 0 + Rendering Enabled + Not x=255
-                if is_sprite_0 && bg_pixel != 0 {
+                if is_sprite_0 && bg_pixel != 0 && (spr_pal & 0x03) != 0 {
                     if x != 255 && self.mask.show_background() && self.mask.show_sprites() {
                         self.status.set(StatusRegister::SPRITE_ZERO_HIT, true);
                     }
