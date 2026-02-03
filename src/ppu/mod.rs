@@ -189,12 +189,12 @@ impl PPU {
             // Cycles 1-256: BG fetches (no pixel output) + sprite evaluation for scanline 0
             1..=64 => {
                 self.fetch_background(rom);
-                self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
             }
 
             65..=256 => {
                 self.fetch_background(rom);
-                self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
 
                 // Sprite evaluation for scanline 0
                 self.tick_sprite_evaluation_prerender();
@@ -208,13 +208,13 @@ impl PPU {
             257 => {
                 self.load_bg_shifters();
                 self.internal.copy_horizontal();
-                self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                self.update_a12(rom, self.ctrl.sprt_pattern_addr());
             }
 
             // Cycles 258-320: Sprite pattern fetches for scanline 0
             258..=320 => {
                 self.fetch_sprite_patterns_prerender(rom);
-                self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                self.update_a12(rom, self.ctrl.sprt_pattern_addr());
 
                 // Cycles 280-304: Copy vertical bits repeatedly
                 if (280..=304).contains(&self.cycles) {
@@ -225,7 +225,7 @@ impl PPU {
             // Cycles 321-336: Fetch first 2 BG tiles for scanline 0
             321..=336 => {
                 self.fetch_background(rom);
-                self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
             }
 
             // Cycles 337-340: Unused NT fetches
@@ -234,7 +234,7 @@ impl PPU {
                     let v = self.internal.get_v();
                     let addr = 0x2000 | (v & 0x0FFF);
                     self.peek_vram(rom, addr);
-                    self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    self.update_a12(rom, self.ctrl.bknd_pattern_addr());
                 }
             }
 
@@ -418,7 +418,7 @@ impl PPU {
             // Cycles 1-64: Clear secondary OAM (writes 0xFF)
             1..=64 => {
                 self.fetch_background(rom);
-                self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
 
                 // Clear secondary OAM: on odd cycles read, on even cycles write
                 if self.cycles % 2 == 0 {
@@ -444,7 +444,7 @@ impl PPU {
             // Cycles 65-256: Sprite evaluation + BG fetch + pixel output
             65..=256 => {
                 self.fetch_background(rom);
-                self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
 
                 // Sprite evaluation happens on odd cycles (read) and even cycles (write)
                 self.tick_sprite_evaluation();
@@ -461,20 +461,20 @@ impl PPU {
             257 => {
                 self.load_bg_shifters();
                 self.internal.copy_horizontal();
-                self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                self.update_a12(rom, self.ctrl.sprt_pattern_addr());
             }
 
             // Cycles 258-320: Fetch sprite patterns for next scanline
             // Each sprite takes 8 cycles: garbage NT, garbage NT, pattern lo, pattern hi
             258..=320 => {
                 self.fetch_sprite_patterns(rom);
-                self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                self.update_a12(rom, self.ctrl.sprt_pattern_addr());
             }
 
             // Cycles 321-336: Fetch first 2 BG tiles for next scanline
             321..=336 => {
                 self.fetch_background(rom);
-                self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
             }
 
             // Cycles 337-340: Unused NT fetches
@@ -483,7 +483,7 @@ impl PPU {
                     let v = self.internal.get_v();
                     let addr = 0x2000 | (v & 0x0FFF);
                     self.peek_vram(rom, addr);
-                    self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    self.update_a12(rom, self.ctrl.bknd_pattern_addr());
                 }
             }
 
@@ -866,17 +866,13 @@ impl PPU {
         self.palette_table[table_idx as usize]
     }
 
-    fn handle_a12_check(&mut self, rom: &mut Rom, addr: u16) {
-        self.update_a12(addr, rom);
-    }
-
-    pub fn update_a12(&mut self, addr: u16, rom: &mut Rom) {
+    pub fn update_a12(&mut self, rom: &mut Rom, addr: u16) {
         let a12 = (addr & 0x1000) != 0;
         if a12 != self.a12_state {
             if !a12 {
                 self.a12lo_period = 0;
             } else {
-                if self.a12lo_period >= 15 {
+                if self.a12lo_period >= 9 {
                     rom.clock_scanline_irq();
                 }
             }
@@ -962,7 +958,7 @@ impl PPU {
 
     fn read_vram(&mut self, rom: &mut Rom, addr: u16) -> u8 {
         let addr = addr & 0x3FFF;
-        self.handle_a12_check(rom, addr);
+        self.update_a12(rom, addr);
 
         match addr {
             0x0000..=0x1FFF => rom.read_chr(addr),

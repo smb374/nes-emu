@@ -85,31 +85,38 @@ impl<'call> Bus<'call> {
         let tcycles = cycles as usize + self.cycles_acc;
         self.cycles += tcycles as usize;
 
-        if self.oam_dma_remain > 0 {
-            self.oam_dma_remain = self.oam_dma_remain.saturating_sub(cycles);
-            if self.oam_dma_remain == 0 {
-                self.oam_dma = false;
+        let mut stall = 0;
+        for c in 0..tcycles {
+            if self.oam_dma_remain > 0 {
+                self.oam_dma_remain -= 1;
+                if self.oam_dma_remain == 0 {
+                    self.oam_dma = false;
+                }
             }
-        }
-        let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
-        let nmi_before = self.ppu.nmi_interrupt.is_some();
-        self.ppu.tick(&mut self.rom, 3 * cycles);
-        let nmi_after = self.ppu.nmi_interrupt.is_some();
-
-        if !nmi_before && nmi_after {
-            if (self.cb)(&self.ppu, &mut self.joypad1) {
-                return (false, true);
-            }
-        }
-
-        if stall != 0 {
-            self.tick(stall as u16)
-        } else {
+            stall += self.apu.tick(&mut self.rom, 1, self.oam_dma);
+            let nmi_before = self.ppu.nmi_interrupt.is_some();
+            self.ppu.tick(&mut self.rom, 3);
+            let nmi_after = self.ppu.nmi_interrupt.is_some();
             let mapper_irq = self.rom.irq_sig;
             self.rom.irq_sig = false;
             let apu_irq = self.apu.irq_sig;
             self.apu.irq_sig = false;
-            (mapper_irq || apu_irq, false)
+            let is_irq = mapper_irq || apu_irq;
+
+            if !nmi_before && nmi_after {
+                self.cycles_acc = tcycles - c + stall;
+                return (is_irq, (self.cb)(&self.ppu, &mut self.joypad1));
+            } else if is_irq {
+                self.cycles_acc = tcycles - c + stall;
+                return (true, false);
+            }
+        }
+
+        self.cycles_acc = 0;
+        if stall != 0 {
+            self.tick(stall as u16)
+        } else {
+            (false, false)
         }
     }
 

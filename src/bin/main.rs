@@ -13,7 +13,7 @@ use sdl2::{
 };
 
 const FRAME_DURATION: Duration = Duration::from_micros(16639);
-const OVERSCAN_LEFT: usize = 8;
+const OVERSCAN_LEFT: usize = 0;
 const OVERSCAN_RIGHT: usize = 0;
 const OVERSCAN_TOP: usize = 8;
 const OVERSCAN_BOTTOM: usize = 8;
