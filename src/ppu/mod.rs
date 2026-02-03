@@ -448,9 +448,6 @@ impl PPU {
         }
     }
 
-    pub fn read_mask(&self) -> u8 {
-        self.mask.bits()
-    }
     pub fn write_to_mask(&mut self, value: u8) {
         self.mask.update(value);
     }

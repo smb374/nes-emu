@@ -132,11 +132,10 @@ impl<'call> Mem for Bus<'call> {
                 let mirror_down_addr = addr & 0x7FF;
                 self.vram[mirror_down_addr as usize]
             }
-            0x2000 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
+            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
                 // panic!("Attempt to read from write-only PPU address {:x}", addr);
                 0
             }
-            0x2001 => self.ppu.read_mask(),
             0x2002 => self.ppu.read_status(),
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(&mut self.rom),
