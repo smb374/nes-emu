@@ -167,16 +167,13 @@ impl APU {
         self.sample_accumulator += cycles as f64 * SAMPLE_RATE / CPU_FREQ;
         let samples_to_generate = self.sample_accumulator as usize;
 
-        let mut buf = [0.0; 256];
+        let mut buf = Vec::with_capacity(2048);
 
-        for i in (0..samples_to_generate).step_by(256) {
-            let mut top = 0;
-            for j in 0..256.min(samples_to_generate - i) {
-                buf[j] = self.mix_channels();
-                top += 1;
-            }
-            let _ = self.audio_queue.queue_audio(&buf[..top]);
+        for _ in 0..samples_to_generate {
+            buf.push(self.mix_channels());
         }
+
+        self.audio_queue.queue_audio(&buf).unwrap();
 
         let max_queue_size = 44100 * 8 / 20;
         while self.audio_queue.size() > max_queue_size {
@@ -293,9 +290,6 @@ impl APU {
         };
 
         let output = pulse_out + tnd_out;
-
-        // Remove DC offset before filtering (mixer outputs 0.0-1.9, center around 0.95)
-        let output = output - 0.95;
 
         self.lpf14k
             .filter(self.hpf442.filter(self.hpf90.filter(output)))
