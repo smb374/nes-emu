@@ -111,51 +111,7 @@ impl PPU {
                     if (self.cycles >= 1 && self.cycles <= 256)
                         || (self.cycles >= 321 && self.cycles <= 336)
                     {
-                        // Shift registers every cycle
-                        self.update_shifters();
-
-                        // Perform Fetch Pipeline (Every 8 cycles)
-                        match (self.cycles - 1) % 8 {
-                            0 => {
-                                // Load the shifters with the previous tile's data
-                                self.load_bg_shifters();
-
-                                // Fetch Nametable Byte
-                                let v = self.internal.get_v();
-                                let addr = 0x2000 | (v & 0x0FFF);
-                                self.bg_nt_id = self.peek_vram(rom, addr);
-                            }
-                            2 => {
-                                // Fetch Attribute Byte
-                                let v = self.internal.get_v();
-                                let addr =
-                                    0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
-                                let shift = ((v >> 4) & 4) | (v & 2);
-                                self.bg_nt_attrib = (self.peek_vram(rom, addr) >> shift) & 3;
-                            }
-                            4 => {
-                                // Fetch Pattern Table Low
-                                let addr = self.ctrl.bknd_pattern_addr()
-                                    + (self.bg_nt_id as u16 * 16)
-                                    + self.internal.fine_y() as u16;
-                                self.bg_nt_lsb = rom.read_chr(addr);
-                            }
-                            6 => {
-                                // Fetch Pattern Table High
-                                let addr = self.ctrl.bknd_pattern_addr()
-                                    + (self.bg_nt_id as u16 * 16)
-                                    + self.internal.fine_y() as u16
-                                    + 8;
-                                self.bg_nt_msb = rom.read_chr(addr);
-                            }
-                            7 => {
-                                // Increment Coarse X
-                                if rendering_enabled {
-                                    self.internal.increment_x();
-                                }
-                            }
-                            _ => {}
-                        }
+                        self.fetch_background(rom);
                     }
 
                     // Increment Y
@@ -217,6 +173,53 @@ impl PPU {
                     self.odd_frame = !self.odd_frame; // Toggle frame parity
                 }
             }
+        }
+    }
+
+    fn fetch_background(&mut self, rom: &mut Rom) {
+        // Shift registers every cycle
+        self.update_shifters();
+
+        // Perform Fetch Pipeline (Every 8 cycles)
+        match (self.cycles - 1) % 8 {
+            0 => {
+                // Load the shifters with the previous tile's data
+                self.load_bg_shifters();
+
+                // Fetch Nametable Byte
+                let v = self.internal.get_v();
+                let addr = 0x2000 | (v & 0x0FFF);
+                self.bg_nt_id = self.peek_vram(rom, addr);
+            }
+            2 => {
+                // Fetch Attribute Byte
+                let v = self.internal.get_v();
+                let addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
+                let shift = ((v >> 4) & 4) | (v & 2);
+                self.bg_nt_attrib = (self.peek_vram(rom, addr) >> shift) & 3;
+            }
+            4 => {
+                // Fetch Pattern Table Low
+                let addr = self.ctrl.bknd_pattern_addr()
+                    + (self.bg_nt_id as u16 * 16)
+                    + self.internal.fine_y() as u16;
+                self.bg_nt_lsb = rom.read_chr(addr);
+            }
+            6 => {
+                // Fetch Pattern Table High
+                let addr = self.ctrl.bknd_pattern_addr()
+                    + (self.bg_nt_id as u16 * 16)
+                    + self.internal.fine_y() as u16
+                    + 8;
+                self.bg_nt_msb = rom.read_chr(addr);
+            }
+            7 => {
+                // Increment Coarse X
+                if self.mask.show_background() || self.mask.show_sprites() {
+                    self.internal.increment_x();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -339,7 +342,7 @@ impl PPU {
             sprite_count += 1;
             if sprite_count > 8 {
                 self.status.insert(StatusRegister::SPRITE_OVERFLOW);
-                break;
+                // Don't break as it'll have some sprites loss on screen.
             }
 
             let tile_num = self.oam_data[oam_offset + 1];
