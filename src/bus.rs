@@ -233,13 +233,12 @@ impl<'call> Mem for Bus<'call> {
             0x4014 => {
                 let mut buffer: [u8; 256] = [0; 256];
                 let hi: u16 = (data as u16) << 8;
-                let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
+                let add_cycles: u16 = if self.cycles % 2 == 1 { 514 } else { 513 };
                 self.oam_dma = true;
-                self.oam_dma_remain = 512 + add_cycles;
+                self.oam_dma_remain = add_cycles;
 
                 for i in 0..256u16 {
                     buffer[i as usize] = self.read_u8(hi + i);
-                    self.tick(2);
                 }
 
                 self.ppu.write_oam_dma(&buffer);
