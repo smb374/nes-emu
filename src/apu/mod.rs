@@ -65,7 +65,7 @@ impl APU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u8, oam_dma: bool) -> usize {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u16, oam_dma: bool) -> usize {
         let cycles = cycles as usize;
         self.cycles += cycles;
 
@@ -286,7 +286,7 @@ impl APU {
         } else {
             159.79
                 / (1.0
-                    / ((triangle_out as f32 / 8277.0)
+                    / ((triangle_out as f32 / 8227.0)
                         + (noise_out as f32 / 12241.0)
                         + (dmc_out as f32 / 22638.0))
                     + 100.0)
@@ -294,7 +294,11 @@ impl APU {
 
         let output = pulse_out + tnd_out;
 
+        // Remove DC offset before filtering (mixer outputs 0.0-1.9, center around 0.95)
+        let output = output - 0.95;
+
         self.lpf14k
             .filter(self.hpf442.filter(self.hpf90.filter(output)))
+            * 1.5
     }
 }

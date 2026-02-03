@@ -86,7 +86,7 @@ impl<'call> Bus<'call> {
         self.cycles += tcycles as usize;
 
         let mut stall = 0;
-        for _ in 0..cycles {
+        for c in 0..tcycles {
             if self.oam_dma_remain > 0 {
                 self.oam_dma_remain -= 1;
                 if self.oam_dma_remain == 0 {
@@ -97,22 +97,26 @@ impl<'call> Bus<'call> {
             let nmi_before = self.ppu.nmi_interrupt.is_some();
             self.ppu.tick(&mut self.rom, 3);
             let nmi_after = self.ppu.nmi_interrupt.is_some();
-
-            if !nmi_before && nmi_after {
-                if (self.cb)(&self.ppu, &mut self.joypad1) {
-                    return (false, true);
-                }
-            }
-        }
-
-        if stall != 0 {
-            self.tick(stall as u16)
-        } else {
             let mapper_irq = self.rom.irq_sig;
             self.rom.irq_sig = false;
             let apu_irq = self.apu.irq_sig;
             self.apu.irq_sig = false;
-            (mapper_irq || apu_irq, false)
+            let is_irq = mapper_irq || apu_irq;
+
+            if !nmi_before && nmi_after {
+                self.cycles_acc = tcycles - c + stall;
+                return (is_irq, (self.cb)(&self.ppu, &mut self.joypad1));
+            } else if is_irq {
+                self.cycles_acc = tcycles - c + stall;
+                return (true, false);
+            }
+        }
+
+        self.cycles_acc = 0;
+        if stall != 0 {
+            self.tick(stall as u16)
+        } else {
+            (false, false)
         }
     }
 
@@ -132,11 +136,10 @@ impl<'call> Mem for Bus<'call> {
                 let mirror_down_addr = addr & 0x7FF;
                 self.vram[mirror_down_addr as usize]
             }
-            0x2000 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
+            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
                 // panic!("Attempt to read from write-only PPU address {:x}", addr);
                 0
             }
-            0x2001 => self.ppu.read_mask(),
             0x2002 => self.ppu.read_status(),
             0x2004 => self.ppu.read_oam_data(),
             0x2007 => self.ppu.read_data(&mut self.rom),
