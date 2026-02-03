@@ -81,123 +81,91 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) {
         for _ in 0..cycles {
             let rendering_enabled = self.mask.show_background() || self.mask.show_sprites();
-            let visible_scanline = self.scanline < 240;
-            let pre_render_scanline = self.scanline == 261;
 
-            if pre_render_scanline && self.cycles == 1 {
-                self.status.remove(StatusRegister::VBLANK_STARTED);
-                self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
-                self.status.remove(StatusRegister::SPRITE_OVERFLOW);
-            }
-
-            if self.scanline == 241 && self.cycles == 1 {
-                self.status.set(StatusRegister::VBLANK_STARTED, true);
-                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
-                    self.nmi_interrupt = Some(1);
+            match (self.scanline, self.cycles, rendering_enabled) {
+                // Pre-render scanline, cycle 1: Clear status flags
+                (261, 1, _) => {
+                    self.status.remove(StatusRegister::VBLANK_STARTED);
+                    self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
+                    self.status.remove(StatusRegister::SPRITE_OVERFLOW);
                 }
-            }
 
-            if rendering_enabled {
-                if visible_scanline || pre_render_scanline {
-                    // Emulate sprite evaluation
-                    if visible_scanline && self.cycles == 0 {
-                        self.evaluate_sprites(rom);
+                // VBlank start
+                (241, 1, _) => {
+                    self.status.set(StatusRegister::VBLANK_STARTED, true);
+                    if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
+                        self.nmi_interrupt = Some(1);
                     }
-
-                    // Background Rendering & Shifting
-                    if (self.cycles >= 1 && self.cycles <= 256)
-                        || (self.cycles >= 321 && self.cycles <= 336)
-                    {
-                        // Shift registers every cycle
-                        self.update_shifters();
-
-                        // Perform Fetch Pipeline (Every 8 cycles)
-                        match (self.cycles - 1) % 8 {
-                            0 => {
-                                // Load the shifters with the previous tile's data
-                                self.load_bg_shifters();
-
-                                // Fetch Nametable Byte
-                                let v = self.internal.get_v();
-                                let addr = 0x2000 | (v & 0x0FFF);
-                                self.bg_nt_id = self.peek_vram(rom, addr);
-                            }
-                            2 => {
-                                // Fetch Attribute Byte
-                                let v = self.internal.get_v();
-                                let addr =
-                                    0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
-                                let shift = ((v >> 4) & 4) | (v & 2);
-                                self.bg_nt_attrib = (self.peek_vram(rom, addr) >> shift) & 3;
-                            }
-                            4 => {
-                                // Fetch Pattern Table Low
-                                let addr = self.ctrl.bknd_pattern_addr()
-                                    + (self.bg_nt_id as u16 * 16)
-                                    + self.internal.fine_y() as u16;
-                                self.bg_nt_lsb = rom.read_chr(addr);
-                            }
-                            6 => {
-                                // Fetch Pattern Table High
-                                let addr = self.ctrl.bknd_pattern_addr()
-                                    + (self.bg_nt_id as u16 * 16)
-                                    + self.internal.fine_y() as u16
-                                    + 8;
-                                self.bg_nt_msb = rom.read_chr(addr);
-                            }
-                            7 => {
-                                // Increment Coarse X
-                                if rendering_enabled {
-                                    self.internal.increment_x();
-                                }
-                            }
-                            _ => {}
+                }
+                // Visible/pre-render scanlines with rendering enabled
+                (0..=239, cycles, true) => match cycles {
+                    0 => self.evaluate_sprites(rom),
+                    1..=256 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                        if cycles == 256 {
+                            self.internal.increment_y();
                         }
+                        self.draw_pixel_cycle((self.cycles - 1) as usize, rom);
                     }
-
-                    // Increment Y
-                    if self.cycles == 256 {
-                        self.internal.increment_y();
-                    }
-
-                    // Reset X (Copy horizontal scroll bits)
-                    if self.cycles == 257 {
+                    257 => {
                         self.load_bg_shifters();
                         self.internal.copy_horizontal();
-                    }
-
-                    // Pre-render Only: Reset Y (Copy vertical scroll bits)
-                    if pre_render_scanline && self.cycles >= 280 && self.cycles <= 304 {
-                        self.internal.copy_vertical();
-                    }
-
-                    if (self.cycles >= 1 && self.cycles <= 256)
-                        || (self.cycles >= 321 && self.cycles <= 336)
-                    {
-                        // BG fetches
-                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
-                    } else if self.cycles >= 257 && self.cycles <= 320 {
-                        // Sprite fetches
                         self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
-                    } else if self.cycles >= 337 && self.cycles <= 340 {
-                        // Dummy NT fetches (2 more tiles)
-                        if (self.cycles - 1) % 2 == 0 {
-                            let v = self.internal.get_v();
-                            let addr = 0x2000 | (v & 0x0FFF);
-                            self.peek_vram(rom, addr); // Dummy read
-                            self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    258..=320 => {
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                    }
+                    321..=336 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    337..=340 if (cycles - 1) % 2 == 0 => {
+                        let v = self.internal.get_v();
+                        let addr = 0x2000 | (v & 0x0FFF);
+                        self.peek_vram(rom, addr);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    _ => {}
+                },
+                (261, cycles, true) => match cycles {
+                    1..=256 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                        if cycles == 256 {
+                            self.internal.increment_y();
                         }
                     }
-                }
-            }
+                    257 => {
+                        self.load_bg_shifters();
+                        self.internal.copy_horizontal();
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                    }
+                    258..=320 => {
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
 
-            if visible_scanline && self.cycles >= 1 && self.cycles <= 256 {
-                self.draw_pixel_cycle((self.cycles - 1) as usize, rom);
-            }
+                        if (280..=304).contains(&cycles) {
+                            self.internal.copy_vertical();
+                        }
+                    }
+                    321..=336 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    337..=340 if (cycles - 1) % 2 == 0 => {
+                        let v = self.internal.get_v();
+                        let addr = 0x2000 | (v & 0x0FFF);
+                        self.peek_vram(rom, addr);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    _ => {}
+                },
 
+                _ => {}
+            }
             self.cycles += 1;
             if self.scanline == 261
                 && self.cycles == 339
@@ -217,6 +185,53 @@ impl PPU {
                     self.odd_frame = !self.odd_frame; // Toggle frame parity
                 }
             }
+        }
+    }
+
+    fn fetch_background(&mut self, rom: &mut Rom) {
+        // Shift registers every cycle
+        self.update_shifters();
+
+        // Perform Fetch Pipeline (Every 8 cycles)
+        match (self.cycles - 1) % 8 {
+            0 => {
+                // Load the shifters with the previous tile's data
+                self.load_bg_shifters();
+
+                // Fetch Nametable Byte
+                let v = self.internal.get_v();
+                let addr = 0x2000 | (v & 0x0FFF);
+                self.bg_nt_id = self.peek_vram(rom, addr);
+            }
+            2 => {
+                // Fetch Attribute Byte
+                let v = self.internal.get_v();
+                let addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
+                let shift = ((v >> 4) & 4) | (v & 2);
+                self.bg_nt_attrib = (self.peek_vram(rom, addr) >> shift) & 3;
+            }
+            4 => {
+                // Fetch Pattern Table Low
+                let addr = self.ctrl.bknd_pattern_addr()
+                    + (self.bg_nt_id as u16 * 16)
+                    + self.internal.fine_y() as u16;
+                self.bg_nt_lsb = rom.read_chr(addr);
+            }
+            6 => {
+                // Fetch Pattern Table High
+                let addr = self.ctrl.bknd_pattern_addr()
+                    + (self.bg_nt_id as u16 * 16)
+                    + self.internal.fine_y() as u16
+                    + 8;
+                self.bg_nt_msb = rom.read_chr(addr);
+            }
+            7 => {
+                // Increment Coarse X
+                if self.mask.show_background() || self.mask.show_sprites() {
+                    self.internal.increment_x();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -275,7 +290,7 @@ impl PPU {
         let (final_pixel, final_palette) = match sprite_data {
             Some((spr_pal, priority, is_sprite_0)) => {
                 // Check Sprite 0 Hit: Opaque BG + Opaque Sprite 0 + Rendering Enabled + Not x=255
-                if is_sprite_0 && bg_pixel != 0 {
+                if is_sprite_0 && bg_pixel != 0 && (spr_pal & 0x03) != 0 {
                     if x != 255 && self.mask.show_background() && self.mask.show_sprites() {
                         self.status.set(StatusRegister::SPRITE_ZERO_HIT, true);
                     }
@@ -339,7 +354,7 @@ impl PPU {
             sprite_count += 1;
             if sprite_count > 8 {
                 self.status.insert(StatusRegister::SPRITE_OVERFLOW);
-                break;
+                // Don't break as it'll have some sprites loss on screen.
             }
 
             let tile_num = self.oam_data[oam_offset + 1];
@@ -510,7 +525,7 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize]
             }
-            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
+            0x3F00..=0x3F1F => self.palette_table[(addr - 0x3F00) as usize],
             _ => 0,
         }
     }
@@ -533,7 +548,7 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize] = val;
             }
-            0x3F00..=0x3FFF => {
+            0x3F00..=0x3F1F => {
                 self.palette_table[(addr - 0x3F00) as usize] = val;
             }
             _ => {}
