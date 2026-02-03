@@ -85,23 +85,20 @@ impl<'call> Bus<'call> {
         let tcycles = cycles as usize + self.cycles_acc;
         self.cycles += tcycles as usize;
 
-        let mut stall = 0;
-        for _ in 0..cycles {
-            if self.oam_dma_remain > 0 {
-                self.oam_dma_remain -= 1;
-                if self.oam_dma_remain == 0 {
-                    self.oam_dma = false;
-                }
+        if self.oam_dma_remain > 0 {
+            self.oam_dma_remain = self.oam_dma_remain.saturating_sub(cycles);
+            if self.oam_dma_remain == 0 {
+                self.oam_dma = false;
             }
-            stall += self.apu.tick(&mut self.rom, 1, self.oam_dma);
-            let nmi_before = self.ppu.nmi_interrupt.is_some();
-            self.ppu.tick(&mut self.rom, 3);
-            let nmi_after = self.ppu.nmi_interrupt.is_some();
+        }
+        let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
+        let nmi_before = self.ppu.nmi_interrupt.is_some();
+        self.ppu.tick(&mut self.rom, 3 * cycles);
+        let nmi_after = self.ppu.nmi_interrupt.is_some();
 
-            if !nmi_before && nmi_after {
-                if (self.cb)(&self.ppu, &mut self.joypad1) {
-                    return (false, true);
-                }
+        if !nmi_before && nmi_after {
+            if (self.cb)(&self.ppu, &mut self.joypad1) {
+                return (false, true);
             }
         }
 
