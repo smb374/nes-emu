@@ -231,58 +231,84 @@ impl<'a> CPU<'a> {
         match mode {
             None => None,
             Some(m) => match m {
-                AddressMode::IMM => Some(self.pc),
-                AddressMode::ZP => Some(self.read_u8(self.pc) as u16),
+                AddressMode::IMM => {
+                    let addr = self.pc;
+                    Some(addr)
+                }
+                AddressMode::ZP => {
+                    let addr = self.read_u8(self.pc) as u16;
+                    Some(addr)
+                }
                 AddressMode::ZPX => {
                     let base = self.read_u8(self.pc);
                     self.read_u8(base as u16);
-                    Some(base.wrapping_add(self.reg_x) as u16)
+                    let addr = base.wrapping_add(self.reg_x) as u16;
+                    Some(addr)
                 }
                 AddressMode::ZPY => {
                     let base = self.read_u8(self.pc);
                     self.read_u8(base as u16);
-                    Some(base.wrapping_add(self.reg_y) as u16)
+                    let addr = base.wrapping_add(self.reg_y) as u16;
+                    Some(addr)
                 }
-                AddressMode::ABS => Some(self.read_u16(self.pc)),
+                AddressMode::ABS => {
+                    let lo = self.read_u8(self.pc) as u16;
+                    let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+                    Some((hi << 8) | lo)
+                }
                 AddressMode::ABSX => {
-                    let base = self.read_u16(self.pc);
+                    let lo = self.read_u8(self.pc) as u16;
+                    let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+
+                    let base = (hi << 8) | lo;
                     let addr = base.wrapping_add(self.reg_x as u16);
-                    let page_crossed = Self::page_crossed(base, addr);
+                    let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
 
+                    // For writes and RMW, always do the dummy read
+                    // For reads, only if page crossed
                     if instr_type != InstructionType::Read || page_crossed {
-                        self.read_u8(self.pc);
+                        // Dummy read from potentially incorrect address
+                        let wrong_addr = (hi << 8) | ((lo + self.reg_x as u16) & 0xFF);
+                        self.read_u8(wrong_addr);
                     }
 
                     Some(addr)
                 }
+
+                // Absolute,Y: Same as ABSX but with Y
                 AddressMode::ABSY => {
-                    let base = self.read_u16(self.pc);
+                    let lo = self.read_u8(self.pc) as u16;
+                    let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+
+                    let base = (hi << 8) | lo;
                     let addr = base.wrapping_add(self.reg_y as u16);
-                    let page_crossed = Self::page_crossed(base, addr);
+                    let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
 
                     if instr_type != InstructionType::Read || page_crossed {
-                        self.read_u8(self.pc);
+                        let wrong_addr = (hi << 8) | ((lo + self.reg_y as u16) & 0xFF);
+                        self.read_u8(wrong_addr);
                     }
 
                     Some(addr)
                 }
+
                 AddressMode::IND => {
-                    let addr = self.read_u16(self.pc);
-                    // 6502 bug: if address is $xxFF, high byte wraps to $xx00
-                    let result = if addr & 0xFF == 0xFF {
-                        let lo = self.read_u8(addr);
-                        let hi = self.read_u8(addr & 0xFF00); // Wrap to same page
-                        (hi as u16) << 8 | lo as u16
+                    let ptr_lo = self.read_u8(self.pc) as u16;
+                    let ptr_hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+                    let ptr = (ptr_hi << 8) | ptr_lo;
+                    let lo = self.read_u8(ptr) as u16;
+                    let hi_addr = if ptr_lo == 0xFF {
+                        ptr & 0xFF00 // Wrap within same page
                     } else {
-                        self.read_u16(addr)
+                        ptr + 1
                     };
-                    Some(result)
+                    let hi = self.read_u8(hi_addr) as u16;
+
+                    Some((hi << 8) | lo)
                 }
+
                 AddressMode::INDX => {
                     let ptr = self.read_u8(self.pc);
-                    self.pc = self.pc.wrapping_add(1);
-
-                    // Dummy read while adding X
                     self.read_u8(ptr as u16);
 
                     let ptr_x = ptr.wrapping_add(self.reg_x);
@@ -293,8 +319,6 @@ impl<'a> CPU<'a> {
                 }
                 AddressMode::INDY => {
                     let ptr = self.read_u8(self.pc);
-                    self.pc = self.pc.wrapping_add(1);
-
                     let lo = self.read_u8(ptr as u16) as u16;
                     let hi = self.read_u8(ptr.wrapping_add(1) as u16) as u16;
 
