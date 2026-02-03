@@ -81,79 +81,91 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u8) {
+    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) {
         for _ in 0..cycles {
             let rendering_enabled = self.mask.show_background() || self.mask.show_sprites();
-            let visible_scanline = self.scanline < 240;
-            let pre_render_scanline = self.scanline == 261;
 
-            if pre_render_scanline && self.cycles == 1 {
-                self.status.remove(StatusRegister::VBLANK_STARTED);
-                self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
-                self.status.remove(StatusRegister::SPRITE_OVERFLOW);
-            }
-
-            if self.scanline == 241 && self.cycles == 1 {
-                self.status.set(StatusRegister::VBLANK_STARTED, true);
-                if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
-                    self.nmi_interrupt = Some(1);
+            match (self.scanline, self.cycles, rendering_enabled) {
+                // Pre-render scanline, cycle 1: Clear status flags
+                (261, 1, _) => {
+                    self.status.remove(StatusRegister::VBLANK_STARTED);
+                    self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
+                    self.status.remove(StatusRegister::SPRITE_OVERFLOW);
                 }
-            }
 
-            if rendering_enabled {
-                if visible_scanline || pre_render_scanline {
-                    // Emulate sprite evaluation
-                    if visible_scanline && self.cycles == 0 {
-                        self.evaluate_sprites(rom);
+                // VBlank start
+                (241, 1, _) => {
+                    self.status.set(StatusRegister::VBLANK_STARTED, true);
+                    if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
+                        self.nmi_interrupt = Some(1);
                     }
-
-                    // Background Rendering & Shifting
-                    if (self.cycles >= 1 && self.cycles <= 256)
-                        || (self.cycles >= 321 && self.cycles <= 336)
-                    {
+                }
+                // Visible/pre-render scanlines with rendering enabled
+                (0..=239, cycles, true) => match cycles {
+                    0 => self.evaluate_sprites(rom),
+                    1..=256 => {
                         self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                        if cycles == 256 {
+                            self.internal.increment_y();
+                        }
+                        self.draw_pixel_cycle((self.cycles - 1) as usize, rom);
                     }
-
-                    // Increment Y
-                    if self.cycles == 256 {
-                        self.internal.increment_y();
-                    }
-
-                    // Reset X (Copy horizontal scroll bits)
-                    if self.cycles == 257 {
+                    257 => {
                         self.load_bg_shifters();
                         self.internal.copy_horizontal();
-                    }
-
-                    // Pre-render Only: Reset Y (Copy vertical scroll bits)
-                    if pre_render_scanline && self.cycles >= 280 && self.cycles <= 304 {
-                        self.internal.copy_vertical();
-                    }
-
-                    if (self.cycles >= 1 && self.cycles <= 256)
-                        || (self.cycles >= 321 && self.cycles <= 336)
-                    {
-                        // BG fetches
-                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
-                    } else if self.cycles >= 257 && self.cycles <= 320 {
-                        // Sprite fetches
                         self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
-                    } else if self.cycles >= 337 && self.cycles <= 340 {
-                        // Dummy NT fetches (2 more tiles)
-                        if (self.cycles - 1) % 2 == 0 {
-                            let v = self.internal.get_v();
-                            let addr = 0x2000 | (v & 0x0FFF);
-                            self.peek_vram(rom, addr); // Dummy read
-                            self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    258..=320 => {
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                    }
+                    321..=336 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    337..=340 if (cycles - 1) % 2 == 0 => {
+                        let v = self.internal.get_v();
+                        let addr = 0x2000 | (v & 0x0FFF);
+                        self.peek_vram(rom, addr);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    _ => {}
+                },
+                (261, cycles, true) => match cycles {
+                    1..=256 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                        if cycles == 256 {
+                            self.internal.increment_y();
                         }
                     }
-                }
-            }
+                    257 => {
+                        self.load_bg_shifters();
+                        self.internal.copy_horizontal();
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
+                    }
+                    258..=320 => {
+                        self.handle_a12_check(rom, self.ctrl.sprt_pattern_addr());
 
-            if visible_scanline && self.cycles >= 1 && self.cycles <= 256 {
-                self.draw_pixel_cycle((self.cycles - 1) as usize, rom);
-            }
+                        if (280..=304).contains(&cycles) {
+                            self.internal.copy_vertical();
+                        }
+                    }
+                    321..=336 => {
+                        self.fetch_background(rom);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    337..=340 if (cycles - 1) % 2 == 0 => {
+                        let v = self.internal.get_v();
+                        let addr = 0x2000 | (v & 0x0FFF);
+                        self.peek_vram(rom, addr);
+                        self.handle_a12_check(rom, self.ctrl.bknd_pattern_addr());
+                    }
+                    _ => {}
+                },
 
+                _ => {}
+            }
             self.cycles += 1;
             if self.scanline == 261
                 && self.cycles == 339
@@ -513,7 +525,7 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize]
             }
-            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize],
+            0x3F00..=0x3F1F => self.palette_table[(addr - 0x3F00) as usize],
             _ => 0,
         }
     }
@@ -536,7 +548,7 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize] = val;
             }
-            0x3F00..=0x3FFF => {
+            0x3F00..=0x3F1F => {
                 self.palette_table[(addr - 0x3F00) as usize] = val;
             }
             _ => {}
