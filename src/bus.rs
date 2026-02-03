@@ -85,38 +85,31 @@ impl<'call> Bus<'call> {
         let tcycles = cycles as usize + self.cycles_acc;
         self.cycles += tcycles as usize;
 
-        let mut stall = 0;
-        for c in 0..tcycles {
-            if self.oam_dma_remain > 0 {
-                self.oam_dma_remain -= 1;
-                if self.oam_dma_remain == 0 {
-                    self.oam_dma = false;
-                }
+        if self.oam_dma_remain > 0 {
+            self.oam_dma_remain = self.oam_dma_remain.saturating_sub(cycles);
+            if self.oam_dma_remain == 0 {
+                self.oam_dma = false;
             }
-            stall += self.apu.tick(&mut self.rom, 1, self.oam_dma);
-            let nmi_before = self.ppu.nmi_interrupt.is_some();
-            self.ppu.tick(&mut self.rom, 3);
-            let nmi_after = self.ppu.nmi_interrupt.is_some();
+        }
+        let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
+        let nmi_before = self.ppu.nmi_interrupt.is_some();
+        self.ppu.tick(&mut self.rom, 3 * cycles);
+        let nmi_after = self.ppu.nmi_interrupt.is_some();
+
+        if !nmi_before && nmi_after {
+            if (self.cb)(&self.ppu, &mut self.joypad1) {
+                return (false, true);
+            }
+        }
+
+        if stall != 0 {
+            self.tick(stall as u16)
+        } else {
             let mapper_irq = self.rom.irq_sig;
             self.rom.irq_sig = false;
             let apu_irq = self.apu.irq_sig;
             self.apu.irq_sig = false;
-            let is_irq = mapper_irq || apu_irq;
-
-            if !nmi_before && nmi_after {
-                self.cycles_acc = tcycles - c + stall;
-                return (is_irq, (self.cb)(&self.ppu, &mut self.joypad1));
-            } else if is_irq {
-                self.cycles_acc = tcycles - c + stall;
-                return (true, false);
-            }
-        }
-
-        self.cycles_acc = 0;
-        if stall != 0 {
-            self.tick(stall as u16)
-        } else {
-            (false, false)
+            (mapper_irq || apu_irq, false)
         }
     }
 
@@ -233,12 +226,13 @@ impl<'call> Mem for Bus<'call> {
             0x4014 => {
                 let mut buffer: [u8; 256] = [0; 256];
                 let hi: u16 = (data as u16) << 8;
-                let add_cycles: u16 = if self.cycles % 2 == 1 { 514 } else { 513 };
+                let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
                 self.oam_dma = true;
-                self.oam_dma_remain = add_cycles;
+                self.oam_dma_remain = 512 + add_cycles;
 
                 for i in 0..256u16 {
                     buffer[i as usize] = self.read_u8(hi + i);
+                    self.tick(2);
                 }
 
                 self.ppu.write_oam_dma(&buffer);
