@@ -224,19 +224,21 @@ impl<'call> Mem for Bus<'call> {
 
             // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
             0x4014 => {
-                let mut buffer: [u8; 256] = [0; 256];
                 let hi: u16 = (data as u16) << 8;
                 let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
                 self.oam_dma = true;
                 self.oam_dma_remain = 512 + add_cycles;
 
-                for i in 0..256u16 {
-                    buffer[i as usize] = self.read_u8(hi + i);
-                    self.tick(2);
-                }
-
-                self.ppu.write_oam_dma(&buffer);
+                // Halt + optional alignment cycles
                 self.tick(add_cycles);
+
+                // 256 get/put pairs - write happens during the put cycle
+                for i in 0..256u16 {
+                    let byte = self.read_u8(hi + i); // Get cycle (read from memory)
+                    self.tick(1);
+                    self.ppu.write_to_oam_data(byte); // Put cycle (write to $2004)
+                    self.tick(1);
+                }
             }
 
             0x4015 => self.apu.write_status(data),
