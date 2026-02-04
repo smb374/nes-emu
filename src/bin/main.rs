@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::c_int,
+    io::Write,
     time::{Duration, Instant},
 };
 
@@ -40,7 +41,9 @@ struct Args {
 }
 
 fn main() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
+        .format(|buf, record| writeln!(buf, "{}", record.args()))
+        .init();
     let handler = SigHandler::Handler(shutdown);
     let action = SigAction::new(handler, SaFlags::empty(), SigSet::empty());
     unsafe {

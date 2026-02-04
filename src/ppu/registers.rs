@@ -163,6 +163,8 @@ bitflags! {
     // ||+------- Sprite overflow flag
     // |+-------- Sprite 0 hit flag
     // +--------- Vblank flag, cleared on read. Unreliable; see below.
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct StatusRegister: u8 {
         const SPRITE_OVERFLOW = 0b00100000;
         const SPRITE_ZERO_HIT = 0b01000000;
