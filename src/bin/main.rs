@@ -31,6 +31,7 @@ struct Args {
 }
 
 fn main() {
+    simple_logger::init_with_env().unwrap();
     let args = Args::parse();
     let mut key_map = HashMap::new();
     key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
@@ -155,12 +156,12 @@ fn main() {
     let mut cpu = CPU::new(bus);
 
     cpu.reset();
-    cpu.run_with_cb(|_cpu| {
-        // println!("{}", nes_emu::trace::trace(_cpu));
+    cpu.run_with_cb(|cpu| {
+        log::debug!("{}", nes_emu::trace::trace(cpu));
     });
 
     // Save PRG-RAM on exit
     if let Err(e) = cpu.save_prg_ram() {
-        eprintln!("Warning: Failed to save PRG-RAM: {}", e);
+        log::warn!("Warning: Failed to save PRG-RAM: {}", e);
     }
 }

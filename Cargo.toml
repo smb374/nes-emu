@@ -8,6 +8,8 @@ bitflags = "^2"
 sdl2 = { version = "^0.38", features = ["use-pkgconfig", "static-link", "mixer"] }
 rand = "^0.9"
 clap = { version = "^4", features = ["derive"] }
+log = "^0.4"
+simple_logger = "^5"
 
 [[bin]]
 name = "emulator"

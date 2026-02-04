@@ -5,6 +5,7 @@ use crate::{
 };
 
 pub fn trace(cpu: &mut CPU) -> String {
+    cpu.tick_disable = true;
     let code = cpu.read_u8(cpu.pc);
     let op = OPS[code as usize].unwrap();
 
@@ -127,6 +128,7 @@ pub fn trace(cpu: &mut CPU) -> String {
         .trim()
         .to_string();
 
+    cpu.tick_disable = false;
     format!(
         "{:47} A:{:02x} X:{:02x} Y:{:02x} P:{:02x} SP:{:02x} PPU:{: >3},{: >3} CYC:{}",
         asm_str,

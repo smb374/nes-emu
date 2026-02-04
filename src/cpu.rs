@@ -59,6 +59,7 @@ pub struct CPU<'a> {
     irq_sig: bool,
     exit_sig: bool,
     pub cycles: usize,
+    pub tick_disable: bool,
 }
 
 impl<'a> Mem for CPU<'a> {
@@ -85,6 +86,7 @@ impl<'a> CPU<'a> {
             irq_sig: false,
             exit_sig: false,
             cycles: 0,
+            tick_disable: false,
         }
     }
 
@@ -96,8 +98,8 @@ impl<'a> CPU<'a> {
         self.status = CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE;
         self.cycles = 0;
 
-        self.pc = self.read_u16(0xFFFC);
         self.tick(5);
+        self.pc = self.read_u16(0xFFFC);
     }
 
     pub fn save_prg_ram(&self) -> Result<(), String> {
@@ -138,11 +140,13 @@ impl<'a> CPU<'a> {
     }
 
     fn tick(&mut self, cycles: u16) {
-        let (irq, exit) = self.bus.tick(cycles);
-        self.irq_sig |= irq;
-        self.exit_sig |= exit;
+        if !self.tick_disable {
+            let (irq, exit) = self.bus.tick(cycles);
+            self.irq_sig |= irq;
+            self.exit_sig |= exit;
 
-        self.cycles += cycles as usize;
+            self.cycles += cycles as usize;
+        }
     }
 
     fn interrupt_nmi(&mut self) {
