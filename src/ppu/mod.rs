@@ -51,7 +51,7 @@ pub struct PPU {
     pub nmi_interrupt: Option<u8>,
     pub scanline: u16,
     pub cycles: usize,
-    frames: usize,
+    pub frames: usize,
 
     pub frame_buffer: [u8; 256 * 240 * 3],
 

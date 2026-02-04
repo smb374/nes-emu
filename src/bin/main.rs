@@ -82,17 +82,13 @@ fn main() {
 
     let creator = canvas.texture_creator();
     let mut texture = creator
-        .create_texture_target(
+        .create_texture_streaming(
             PixelFormatEnum::RGB24,
             VISIBLE_WIDTH as u32,
             VISIBLE_HEIGHT as u32,
         )
         .unwrap();
-    let mut visible_buffer = [0u8; VISIBLE_WIDTH * VISIBLE_HEIGHT * 3];
-    texture
-        .update(None, &visible_buffer[..], VISIBLE_WIDTH * 3)
-        .unwrap();
-    canvas.copy(&texture, None, None).unwrap();
+    canvas.clear();
     canvas.present();
 
     let desired_spec = AudioSpecDesired {
@@ -124,18 +120,18 @@ fn main() {
         rom,
         audio_device,
         move |ppu: &PPU, joypad: &mut joypad::Joypad| {
-            // Copy visible region from PPU frame buffer, applying overscan
-            for y in 0..VISIBLE_HEIGHT {
-                let src_y = y + OVERSCAN_TOP;
-                let src_offset = (src_y * 256 + OVERSCAN_LEFT) * 3;
-                let dst_offset = y * VISIBLE_WIDTH * 3;
-
-                visible_buffer[dst_offset..dst_offset + VISIBLE_WIDTH * 3]
-                    .copy_from_slice(&ppu.frame_buffer[src_offset..src_offset + VISIBLE_WIDTH * 3]);
-            }
-
             texture
-                .update(None, &visible_buffer[..], VISIBLE_WIDTH * 3)
+                .with_lock(None, |buffer: &mut [u8], pitch: usize| {
+                    for y in 0..VISIBLE_HEIGHT {
+                        let src_y = y + OVERSCAN_TOP;
+                        let src_offset = (src_y * 256 + OVERSCAN_LEFT) * 3;
+                        let dst_offset = y * pitch;
+
+                        buffer[dst_offset..dst_offset + VISIBLE_WIDTH * 3].copy_from_slice(
+                            &ppu.frame_buffer[src_offset..src_offset + VISIBLE_WIDTH * 3],
+                        );
+                    }
+                })
                 .unwrap();
             canvas.copy(&texture, None, None).unwrap();
             canvas.present();

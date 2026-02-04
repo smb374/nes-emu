@@ -92,11 +92,11 @@ impl<'call> Bus<'call> {
             }
         }
         let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
-        let nmi_before = self.ppu.nmi_interrupt.is_some();
+        let frame_before = self.ppu.frames;
         self.ppu.tick(&mut self.rom, 3 * cycles);
-        let nmi_after = self.ppu.nmi_interrupt.is_some();
+        let frame_after = self.ppu.frames;
 
-        if !nmi_before && nmi_after {
+        if frame_before != frame_after {
             if (self.cb)(&self.ppu, &mut self.joypad1) {
                 return (false, true);
             }
