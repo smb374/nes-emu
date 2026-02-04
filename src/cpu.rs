@@ -64,6 +64,7 @@ pub struct CPU<'a> {
     exit_sig: bool,
     pub cycles: usize,
     pub tick_disable: bool,
+    nmi_delay: bool,
 }
 
 impl<'a> Mem for CPU<'a> {
@@ -91,6 +92,7 @@ impl<'a> CPU<'a> {
             exit_sig: false,
             cycles: 0,
             tick_disable: false,
+            nmi_delay: false,
         }
     }
 
@@ -122,11 +124,20 @@ impl<'a> CPU<'a> {
             if GLOBAL_EXIT.load(std::sync::atomic::Ordering::Acquire) {
                 break;
             }
-            if let Some(_nmi) = self.bus.poll_nmi_status() {
+
+            if let Some(nmi_type) = self.bus.poll_nmi_status() {
+                if nmi_type == 2 {
+                    self.nmi_delay = true;
+                } else {
+                    self.interrupt_nmi();
+                }
+            } else if self.nmi_delay {
+                self.nmi_delay = false;
                 self.interrupt_nmi();
             } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {
                 self.interrupt_irq();
             }
+
             self.irq_sig = false;
             cb(self);
             let opcode = self.read_u8(self.pc);

@@ -51,6 +51,7 @@ pub struct PPU {
     pub nmi_interrupt: Option<u8>,
     pub scanline: u16,
     pub cycles: usize,
+    frames: usize,
 
     pub frame_buffer: [u8; 256 * 240 * 3],
 
@@ -83,6 +84,9 @@ pub struct PPU {
 
     // Odd frame state
     odd_frame: bool,
+
+    suppress_vbl: bool,
+    start_nmi: bool,
 }
 
 impl PPU {
@@ -99,6 +103,7 @@ impl PPU {
             nmi_interrupt: None,
             scanline: 0,
             cycles: 0,
+            frames: 0,
             internal: InternalRegisters::new(),
             frame_buffer: [0; 256 * 240 * 3],
 
@@ -122,6 +127,8 @@ impl PPU {
             a12lo_period: 0,
 
             odd_frame: false,
+            suppress_vbl: false,
+            start_nmi: false,
         }
     }
 
@@ -129,10 +136,8 @@ impl PPU {
         for _ in 0..cycles {
             let rendering_enabled = self.mask.show_background() || self.mask.show_sprites();
 
+            self.advance_cycle(rendering_enabled);
             match self.scanline {
-                // Pre-render scanline (261)
-                261 => self.tick_prerender_scanline(rom, rendering_enabled),
-
                 // Visible scanlines (0-239)
                 0..=239 => self.tick_visible_scanline(rom, rendering_enabled),
 
@@ -140,19 +145,32 @@ impl PPU {
                 240 => {}
 
                 // VBlank scanlines (241-260)
-                241..=260 => {
-                    if self.scanline == 241 && self.cycles == 1 {
-                        self.status.set(StatusRegister::VBLANK_STARTED, true);
-                        if self.ctrl.contains(ControlRegister::GENERATE_NMI) {
-                            self.nmi_interrupt = Some(1);
+                241 => match self.cycles {
+                    1 => {
+                        if !self.suppress_vbl {
+                            self.status.set(StatusRegister::VBLANK_STARTED, true);
+                            self.start_nmi = self.ctrl.contains(ControlRegister::GENERATE_NMI);
                         }
+                        self.suppress_vbl = false;
                     }
-                }
+                    2 if self.start_nmi => {
+                        self.nmi_interrupt = Some(1);
+                        self.start_nmi = false;
+                        log::info!(
+                            "{: >3},{: >3}: Fire NMI @ frame {}",
+                            self.scanline,
+                            self.cycles,
+                            self.frames
+                        );
+                    }
+                    _ => {}
+                },
+
+                // Pre-render scanline (261)
+                261 => self.tick_prerender_scanline(rom, rendering_enabled),
 
                 _ => {}
             }
-
-            self.advance_cycle(rendering_enabled);
         }
     }
 
@@ -670,6 +688,7 @@ impl PPU {
                 self.scanline = 0;
                 self.nmi_interrupt = None;
                 self.odd_frame = !self.odd_frame;
+                self.frames += 1;
             }
         }
     }
@@ -886,11 +905,32 @@ impl PPU {
         let before_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
         self.ctrl.update(value);
         self.internal.update_nametable_from_ctrl(value);
+
+        let after_nmi_status = self.ctrl.contains(ControlRegister::GENERATE_NMI);
+
+        log::info!(
+            "{: >3},{: >3}: GENERATE_NMI {} -> {} @ frame {}",
+            self.scanline,
+            self.cycles,
+            before_nmi_status,
+            after_nmi_status,
+            self.frames
+        );
         if !before_nmi_status
-            && self.ctrl.contains(ControlRegister::GENERATE_NMI)
+            && after_nmi_status
             && self.status.contains(StatusRegister::VBLANK_STARTED)
         {
-            self.nmi_interrupt = Some(1);
+            if self.scanline == 241 && self.cycles == 1 {
+                self.start_nmi = true;
+            } else {
+                self.nmi_interrupt = Some(2);
+                log::info!(
+                    "{: >3},{: >3}: IMM NMI @ frame {}",
+                    self.scanline,
+                    self.cycles,
+                    self.frames
+                );
+            }
         }
     }
 
@@ -899,6 +939,48 @@ impl PPU {
     }
 
     pub fn read_status(&mut self) -> u8 {
+        match (self.scanline, self.cycles) {
+            (241, 0) => {
+                // 1 dot before VBLANK_START
+                self.status.remove(StatusRegister::VBLANK_STARTED);
+                self.suppress_vbl = true;
+                log::info!(
+                    "{: >3},{: >3}: Suppress VBL @ frame {}",
+                    self.scanline,
+                    self.cycles,
+                    self.frames
+                );
+            }
+            (241, 1) if self.ctrl.contains(ControlRegister::GENERATE_NMI) => {
+                self.start_nmi = false;
+                log::info!(
+                    "{: >3},{: >3}: Suppress NMI @ frame {}",
+                    self.scanline,
+                    self.cycles,
+                    self.frames
+                );
+            }
+            (241, 2) if self.ctrl.contains(ControlRegister::GENERATE_NMI) => {
+                self.start_nmi = false;
+                self.nmi_interrupt = None;
+                log::info!(
+                    "{: >3},{: >3}: Suppress NMI @ frame {}",
+                    self.scanline,
+                    self.cycles,
+                    self.frames
+                );
+            }
+            _ => {}
+        };
+        if self.scanline == 240 || self.scanline == 241 {
+            log::info!(
+                "{: >3},{: >3}: STATUS={:08b} @ frame {}",
+                self.scanline,
+                self.cycles,
+                self.status.bits(),
+                self.frames
+            );
+        }
         let data = self.status.bits();
         self.status.remove(StatusRegister::VBLANK_STARTED);
         self.internal.reset_latch();

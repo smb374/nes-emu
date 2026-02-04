@@ -173,7 +173,7 @@ impl<'call> Mem for Bus<'call> {
                 self.ppu.write_to_mask(data);
             }
 
-            0x2002 => panic!("attempt to write to PPU status register"),
+            0x2002 => {}
 
             0x2003 => {
                 self.ppu.write_to_oam_addr(data);
