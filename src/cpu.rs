@@ -778,14 +778,15 @@ impl<'a> CPU<'a> {
             }
             DOP => {
                 let _ = self.operand_addr(op.mode, InstructionType::Read);
+                self.tick(1);
             }
             ISC => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
                 let addr = addr_opt.unwrap();
-                let val = self.read_u8(addr);
+                let mut val = self.read_u8(addr);
                 self.write_u8(addr, val);
-                let res = val.wrapping_add(1);
-                self.write_u8(addr, res);
+                val = val.wrapping_add(1);
+                self.write_u8(addr, val);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
                 let sum = self.reg_a as u16 + (val ^ 0xFF) as u16 + car;
 
@@ -898,6 +899,7 @@ impl<'a> CPU<'a> {
             }
             TOP => {
                 let _ = self.operand_addr(op.mode, InstructionType::Read);
+                self.tick(1);
             }
             XAA => {
                 self.reg_a = self.reg_x;
