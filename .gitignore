@@ -28,3 +28,5 @@ target
 *.log
 *.nes
 *.sav
+*.zip
+/nes-test-roms-master/
