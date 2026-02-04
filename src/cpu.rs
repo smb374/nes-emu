@@ -762,6 +762,7 @@ impl<'a> CPU<'a> {
             ATX => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.reg_a |= 0xFF;
                 self.reg_a &= self.read_u8(addr);
                 self.reg_x = self.reg_a;
                 self.update_nz(self.reg_a);
@@ -902,18 +903,50 @@ impl<'a> CPU<'a> {
                 self.update_nz(self.reg_a);
             }
             SXA => {
-                let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
-                let addr = addr_opt.unwrap();
-                let hi = ((addr >> 8) as u8).wrapping_add(1);
-                let res = self.reg_x & hi;
-                self.write_u8(addr, res);
+                // SXA abs,Y - Store X & (H+1) where H is high byte of base address
+                let lo = self.read_u8(self.pc) as u16;
+                let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+
+                let base = (hi << 8) | lo;
+                let addr = base.wrapping_add(self.reg_y as u16);
+                let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
+
+                // Always do dummy read for write operations
+                let wrong_addr = (hi << 8) | ((lo + self.reg_y as u16) & 0xFF);
+                self.read_u8(wrong_addr);
+
+                let res = self.reg_x & ((hi as u8).wrapping_add(1));
+
+                // If page crossed, the actual address written is also affected
+                let write_addr = if page_crossed {
+                    ((res as u16) << 8) | (addr & 0xFF)
+                } else {
+                    addr
+                };
+                self.write_u8(write_addr, res);
             }
             SYA => {
-                let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
-                let addr = addr_opt.unwrap();
-                let hi = ((addr >> 8) as u8).wrapping_add(1);
-                let res = self.reg_y & hi;
-                self.write_u8(addr, res);
+                // SYA abs,X - Store Y & (H+1) where H is high byte of base address
+                let lo = self.read_u8(self.pc) as u16;
+                let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+
+                let base = (hi << 8) | lo;
+                let addr = base.wrapping_add(self.reg_x as u16);
+                let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
+
+                // Always do dummy read for write operations
+                let wrong_addr = (hi << 8) | ((lo + self.reg_x as u16) & 0xFF);
+                self.read_u8(wrong_addr);
+
+                let res = self.reg_y & ((hi as u8).wrapping_add(1));
+
+                // If page crossed, the actual address written is also affected
+                let write_addr = if page_crossed {
+                    ((res as u16) << 8) | (addr & 0xFF)
+                } else {
+                    addr
+                };
+                self.write_u8(write_addr, res);
             }
             TOP => {
                 let _ = self.operand_addr(op.mode, InstructionType::Read);
