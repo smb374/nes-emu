@@ -289,7 +289,7 @@ impl APU {
                     + 100.0)
         };
 
-        let output = pulse_out + tnd_out;
+        let output = (pulse_out + tnd_out - 0.5) * 2.0;
 
         self.lpf14k
             .filter(self.hpf442.filter(self.hpf90.filter(output)))
