@@ -86,6 +86,11 @@ fn main() {
         )
         .unwrap();
     let mut visible_buffer = [0u8; VISIBLE_WIDTH * VISIBLE_HEIGHT * 3];
+    texture
+        .update(None, &visible_buffer[..], VISIBLE_WIDTH * 3)
+        .unwrap();
+    canvas.copy(&texture, None, None).unwrap();
+    canvas.present();
 
     let desired_spec = AudioSpecDesired {
         freq: Some(44100),
@@ -129,9 +134,7 @@ fn main() {
             texture
                 .update(None, &visible_buffer[..], VISIBLE_WIDTH * 3)
                 .unwrap();
-
             canvas.copy(&texture, None, None).unwrap();
-
             canvas.present();
             for event in event_pump.poll_iter() {
                 match event {

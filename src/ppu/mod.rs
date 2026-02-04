@@ -974,7 +974,7 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize]
             }
-            0x3F00..=0x3F1F => self.palette_table[(addr - 0x3F00) as usize],
+            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize & 0x1F],
             _ => 0,
         }
     }
@@ -997,8 +997,8 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize] = val;
             }
-            0x3F00..=0x3F1F => {
-                self.palette_table[(addr - 0x3F00) as usize] = val;
+            0x3F00..=0x3FFF => {
+                self.palette_table[(addr - 0x3F00) as usize & 0x1F] = val;
             }
             _ => {}
         }
@@ -1041,7 +1041,7 @@ impl PPU {
                 let add_mirror = addr - 0x10;
                 self.palette_table[(add_mirror - 0x3F00) as usize]
             }
-            0x3F00..=0x3F1F => self.palette_table[(addr - 0x3F00) as usize],
+            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize & 0x1F],
             _ => 0,
         }
     }
