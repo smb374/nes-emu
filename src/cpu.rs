@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use bitflags::bitflags;
 
 use crate::{
@@ -13,6 +15,8 @@ use crate::{
 
 const STACK_BASE: u16 = 0x100;
 const STACK_RESET: u8 = 0xFD;
+
+pub static GLOBAL_EXIT: AtomicBool = AtomicBool::new(false);
 
 bitflags! {
     // 7  bit  0
@@ -115,6 +119,9 @@ impl<'a> CPU<'a> {
         F: FnMut(&mut CPU),
     {
         loop {
+            if GLOBAL_EXIT.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
             if let Some(_nmi) = self.bus.poll_nmi_status() {
                 self.interrupt_nmi();
             } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {

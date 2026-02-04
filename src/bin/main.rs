@@ -1,11 +1,19 @@
 use std::{
     collections::HashMap,
+    ffi::c_int,
     time::{Duration, Instant},
 };
 
 use clap::Parser;
 use env_logger::Env;
-use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
+use nes_emu::{
+    bus::Bus,
+    cartridge::Rom,
+    cpu::{CPU, GLOBAL_EXIT},
+    joypad,
+    ppu::PPU,
+};
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal};
 use sdl2::{
     audio::{AudioQueue, AudioSpecDesired},
     event::Event,
@@ -33,6 +41,15 @@ struct Args {
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
+    let handler = SigHandler::Handler(shutdown);
+    let action = SigAction::new(handler, SaFlags::empty(), SigSet::empty());
+    unsafe {
+        nix::sys::signal::sigaction(Signal::SIGINT, &action)
+            .expect("Failed to set SIGINT handler.");
+        nix::sys::signal::sigaction(Signal::SIGTERM, &action)
+            .expect("Failed to set SIGINT handler.");
+    }
+
     let args = Args::parse();
     let mut key_map = HashMap::new();
     key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
@@ -165,4 +182,9 @@ fn main() {
     if let Err(e) = cpu.save_prg_ram() {
         log::warn!("Warning: Failed to save PRG-RAM: {}", e);
     }
+}
+
+extern "C" fn shutdown(_: c_int) {
+    log::info!("Shutting down...");
+    GLOBAL_EXIT.store(true, std::sync::atomic::Ordering::Release);
 }
