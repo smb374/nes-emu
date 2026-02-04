@@ -45,7 +45,7 @@ const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 pub struct Bus<'call> {
     vram: [u8; 0x800],
     rom: Rom,
-    ppu: PPU,
+    pub ppu: PPU,
     apu: APU,
 
     oam_dma: bool,

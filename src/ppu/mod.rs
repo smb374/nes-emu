@@ -49,8 +49,8 @@ pub struct PPU {
     internal_data_buf: u8,
 
     pub nmi_interrupt: Option<u8>,
-    scanline: u16,
-    cycles: usize,
+    pub scanline: u16,
+    pub cycles: usize,
 
     pub frame_buffer: [u8; 256 * 240 * 3],
 
@@ -199,7 +199,7 @@ impl PPU {
                 // Sprite evaluation for scanline 0
                 self.tick_sprite_evaluation_prerender();
 
-                if self.cycles == 256 {
+                if self.cycles == 251 {
                     self.internal.increment_y();
                 }
             }
@@ -449,7 +449,7 @@ impl PPU {
                 // Sprite evaluation happens on odd cycles (read) and even cycles (write)
                 self.tick_sprite_evaluation();
 
-                if self.cycles == 256 {
+                if self.cycles == 251 {
                     self.internal.increment_y();
                 }
 

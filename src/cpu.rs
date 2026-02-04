@@ -55,7 +55,7 @@ pub struct CPU<'a> {
     pub reg_y: u8,
     pub sp: u8,
     pub status: CpuFlags,
-    bus: Bus<'a>,
+    pub bus: Bus<'a>,
     irq_sig: bool,
     exit_sig: bool,
     pub cycles: usize,
@@ -63,9 +63,8 @@ pub struct CPU<'a> {
 
 impl<'a> Mem for CPU<'a> {
     fn read_u8(&mut self, addr: u16) -> u8 {
-        let res = self.bus.read_u8(addr);
         self.tick(1);
-        res
+        self.bus.read_u8(addr)
     }
     fn write_u8(&mut self, addr: u16, val: u8) {
         self.bus.write_u8(addr, val);
@@ -98,6 +97,7 @@ impl<'a> CPU<'a> {
         self.cycles = 0;
 
         self.pc = self.read_u16(0xFFFC);
+        self.tick(5);
     }
 
     pub fn save_prg_ram(&self) -> Result<(), String> {
@@ -218,7 +218,6 @@ impl<'a> CPU<'a> {
         }
     }
 
-    #[allow(dead_code)]
     fn page_crossed(a: u16, b: u16) -> bool {
         (a & 0xFF00) != (b & 0xFF00)
     }
