@@ -4,6 +4,7 @@ use std::{
 };
 
 use clap::Parser;
+use env_logger::Env;
 use nes_emu::{bus::Bus, cartridge::Rom, cpu::CPU, joypad, ppu::PPU};
 use sdl2::{
     audio::{AudioQueue, AudioSpecDesired},
@@ -31,7 +32,7 @@ struct Args {
 }
 
 fn main() {
-    simple_logger::init_with_env().unwrap();
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
     let args = Args::parse();
     let mut key_map = HashMap::new();
     key_map.insert(Keycode::Down, joypad::JoypadButton::DOWN);
