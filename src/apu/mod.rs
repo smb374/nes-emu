@@ -200,10 +200,10 @@ impl APU {
         if self.dmc.bytes_remaining() > 0 {
             res |= 0x10;
         }
-        if self.irq_sig {
+        if self.irq_sig || self.status.contains(APUStatus::FRAME_INTERRUPT) {
             res |= 0x40;
         }
-        if self.dmc.irq_flag {
+        if self.dmc.irq_flag && self.status.contains(APUStatus::DMC_INTERRUPT) {
             res |= 0x80;
         }
         self.status.remove(APUStatus::FRAME_INTERRUPT);
