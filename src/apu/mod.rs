@@ -2,8 +2,6 @@ mod channel;
 pub mod registers;
 mod units;
 
-use std::time::Duration;
-
 pub use channel::TimedChannel;
 use sdl2::audio::AudioQueue;
 
@@ -174,11 +172,6 @@ impl APU {
         }
 
         self.audio_queue.queue_audio(&buf).unwrap();
-
-        let max_queue_size = 44100 * 8 / 20;
-        while self.audio_queue.size() > max_queue_size {
-            std::thread::sleep(Duration::from_micros(1));
-        }
 
         self.sample_accumulator -= samples_to_generate as f64;
     }
