@@ -48,8 +48,8 @@ impl APU {
             frame_counter: FrameCounter::default(),
             irq_sig: false,
 
-            pulse1: PulseChannel::new(false),
-            pulse2: PulseChannel::new(true),
+            pulse1: PulseChannel::new(true),
+            pulse2: PulseChannel::new(false),
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),

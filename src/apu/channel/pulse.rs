@@ -86,7 +86,7 @@ impl PulseChannel {
         self.muted = muted;
     }
     pub fn output(&self) -> u8 {
-        if self.muted || self.length_counter == 0 {
+        if self.muted || self.length_counter == 0 || self.timer_period < 8 {
             0
         } else {
             let duty_output = DUTY_TABLE[self.duty_mode as usize][self.duty_idx as usize];

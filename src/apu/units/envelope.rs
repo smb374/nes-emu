@@ -33,6 +33,8 @@ impl Envelope {
             } else if loop_flag {
                 self.decay_level = 15;
             }
+        } else {
+            self.divider -= 1;
         }
 
         if const_volume {
