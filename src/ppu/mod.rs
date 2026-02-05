@@ -162,12 +162,6 @@ impl PPU {
                     3 if self.start_nmi => {
                         self.nmi_interrupt = Some(1);
                         self.start_nmi = false;
-                        log::info!(
-                            "{: >3},{: >3}: NMI @ frame {}",
-                            self.scanline,
-                            self.cycles,
-                            self.frames
-                        );
                     }
                     _ => {}
                 },
@@ -949,12 +943,6 @@ impl PPU {
             (241, 2) if self.ctrl.contains(ControlRegister::GENERATE_NMI) => {
                 self.start_nmi = false;
                 self.nmi_interrupt = None;
-                log::info!(
-                    "{: >3},{: >3}: Suppress NMI @ frame {}",
-                    self.scanline,
-                    self.cycles,
-                    self.frames
-                );
             }
             _ => {}
         };
