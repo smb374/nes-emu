@@ -51,5 +51,20 @@ impl Joypad {
 
     pub fn set_button_status(&mut self, button: JoypadButton, val: bool) {
         self.button_status.set(button, val);
+        // SOCD Cleaner
+        if val {
+            if button.contains(JoypadButton::LEFT) {
+                self.button_status.remove(JoypadButton::RIGHT);
+            }
+            if button.contains(JoypadButton::RIGHT) {
+                self.button_status.remove(JoypadButton::LEFT);
+            }
+            if button.contains(JoypadButton::UP) {
+                self.button_status.remove(JoypadButton::DOWN);
+            }
+            if button.contains(JoypadButton::DOWN) {
+                self.button_status.remove(JoypadButton::UP);
+            }
+        }
     }
 }
