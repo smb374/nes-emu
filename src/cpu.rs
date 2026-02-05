@@ -125,20 +125,6 @@ impl<'a> CPU<'a> {
                 break;
             }
 
-            if let Some(nmi_type) = self.bus.poll_nmi_status() {
-                if nmi_type == 2 {
-                    self.nmi_delay = true;
-                } else {
-                    self.interrupt_nmi();
-                }
-            } else if self.nmi_delay {
-                self.nmi_delay = false;
-                self.interrupt_nmi();
-            } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {
-                self.interrupt_irq();
-            }
-
-            self.irq_sig = false;
             cb(self);
             let opcode = self.read_u8(self.pc);
             self.pc += 1;
@@ -154,6 +140,21 @@ impl<'a> CPU<'a> {
             } else {
                 panic!("Unknown op: {}", opcode);
             }
+
+            if let Some(nmi_type) = self.bus.poll_nmi_status() {
+                if nmi_type == 2 {
+                    self.nmi_delay = true;
+                } else {
+                    self.interrupt_nmi();
+                }
+            } else if self.nmi_delay {
+                self.nmi_delay = false;
+                self.interrupt_nmi();
+            } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {
+                self.interrupt_irq();
+            }
+
+            self.irq_sig = false;
         }
     }
 

@@ -82,8 +82,7 @@ impl<'call> Bus<'call> {
     }
 
     pub fn tick(&mut self, cycles: u16) -> (bool, bool) {
-        let tcycles = cycles as usize + self.cycles_acc;
-        self.cycles += tcycles as usize;
+        self.cycles += cycles as usize;
 
         if self.oam_dma_remain > 0 {
             self.oam_dma_remain = self.oam_dma_remain.saturating_sub(cycles);
@@ -92,13 +91,15 @@ impl<'call> Bus<'call> {
             }
         }
         let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
-        let frame_before = self.ppu.frames;
-        self.ppu.tick(&mut self.rom, 3 * cycles);
-        let frame_after = self.ppu.frames;
+        for _ in 0..cycles {
+            let frame_before = self.ppu.frames;
+            self.ppu.tick(&mut self.rom, 3);
+            let frame_after = self.ppu.frames;
 
-        if frame_before != frame_after {
-            if (self.cb)(&self.ppu, &mut self.joypad1) {
-                return (false, true);
+            if frame_before != frame_after {
+                if (self.cb)(&self.ppu, &mut self.joypad1) {
+                    return (false, true);
+                }
             }
         }
 

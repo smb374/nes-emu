@@ -177,7 +177,7 @@ fn main() {
 
     cpu.reset();
     cpu.run_with_cb(|cpu| {
-        log::debug!("{}", nes_emu::trace::trace(cpu));
+        log::trace!("{}", nes_emu::trace::trace(cpu));
     });
 
     // Save PRG-RAM on exit
