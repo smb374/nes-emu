@@ -969,8 +969,9 @@ impl PPU {
         self.internal.write_scroll(value);
     }
 
-    pub fn write_to_ppu_addr(&mut self, _rom: &mut Rom, value: u8) {
+    pub fn write_to_ppu_addr(&mut self, rom: &mut Rom, value: u8) {
         self.internal.write_addr(value);
+        self.update_a12(rom, self.internal.get_v());
     }
 
     pub fn read_data(&mut self, rom: &mut Rom) -> u8 {

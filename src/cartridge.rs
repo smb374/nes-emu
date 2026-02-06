@@ -58,8 +58,8 @@ impl Rom {
 
         let prg_rom_size = PRG_ROM_PAGE_SIZE * header.prg_pages as usize;
         let chr_data_size = if header.chr_pages == 0 {
-            // CHR-RAM: 8KB default
-            CHR_ROM_PAGE_SIZE
+            // CHR-RAM: 128KB default
+            CHR_ROM_PAGE_SIZE * 16
         } else {
             CHR_ROM_PAGE_SIZE * header.chr_pages as usize
         };
