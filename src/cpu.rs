@@ -52,6 +52,13 @@ pub enum InstructionType {
     Rmw,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InterruptType {
+    BRK,
+    IRQ,
+    NMI,
+}
+
 pub struct CPU<'a> {
     pub pc: u16,
     pub reg_a: u8,
@@ -64,7 +71,8 @@ pub struct CPU<'a> {
     exit_sig: bool,
     pub cycles: usize,
     pub tick_disable: bool,
-    nmi_delay: bool,
+    nmi_delay: Option<bool>,
+    nmi_latch: Option<u8>,
 }
 
 impl<'a> Mem for CPU<'a> {
@@ -92,7 +100,8 @@ impl<'a> CPU<'a> {
             exit_sig: false,
             cycles: 0,
             tick_disable: false,
-            nmi_delay: false,
+            nmi_delay: None,
+            nmi_latch: None,
         }
     }
 
@@ -130,6 +139,7 @@ impl<'a> CPU<'a> {
             self.pc += 1;
             let pc_cache = self.pc;
             if let Some(op) = OPS[opcode as usize] {
+                let prev_intr_disable = self.status.contains(CpuFlags::INTR_DISABLE);
                 self.run_op(op);
                 if self.exit_sig {
                     break;
@@ -137,24 +147,35 @@ impl<'a> CPU<'a> {
                 if pc_cache == self.pc {
                     self.pc += (op.len - 1) as u16;
                 }
+
+                if let Some(s) = self.nmi_latch.take() {
+                    if s == 2 {
+                        self.nmi_delay = Some(true);
+                    } else {
+                        self.interrupt_nmi();
+                    }
+                } else if self.nmi_delay == Some(false) {
+                    self.interrupt_nmi();
+                    self.nmi_delay = None;
+                } else if self.irq_sig {
+                    let interrupts_disabled = if op.family == RTI {
+                        self.status.contains(CpuFlags::INTR_DISABLE)
+                    } else {
+                        prev_intr_disable
+                    };
+
+                    if !interrupts_disabled {
+                        self.interrupt_irq();
+                    }
+                }
+
+                self.irq_sig = false;
+                if self.nmi_delay == Some(true) {
+                    self.nmi_delay = Some(false);
+                }
             } else {
                 panic!("Unknown op: {}", opcode);
             }
-
-            if let Some(nmi_type) = self.bus.poll_nmi_status() {
-                if nmi_type == 2 {
-                    self.nmi_delay = true;
-                } else {
-                    self.interrupt_nmi();
-                }
-            } else if self.nmi_delay {
-                self.nmi_delay = false;
-                self.interrupt_nmi();
-            } else if self.irq_sig && !self.status.contains(CpuFlags::INTR_DISABLE) {
-                self.interrupt_irq();
-            }
-
-            self.irq_sig = false;
         }
     }
 
@@ -165,33 +186,50 @@ impl<'a> CPU<'a> {
             self.exit_sig |= exit;
 
             self.cycles += cycles as usize;
+            if self.nmi_latch.is_none() {
+                self.nmi_latch = self.bus.poll_nmi_status();
+            }
         }
     }
 
-    fn interrupt_nmi(&mut self) {
-        self.tick(2);
+    fn interrupt_sequence(&mut self, intr_type: InterruptType) {
         self.push_stack_u16(self.pc);
-        let mut flag = self.status.clone();
-        flag.set(CpuFlags::BREAK, false);
-        flag.set(CpuFlags::BREAK2, true);
+        let is_brk = intr_type == InterruptType::BRK;
+        let vector = match intr_type {
+            InterruptType::BRK | InterruptType::IRQ => {
+                if let Some(s) = self.nmi_latch.take() {
+                    if s == 2 {
+                        self.nmi_delay = Some(true);
+                        0xFFFE
+                    } else {
+                        0xFFFA
+                    }
+                } else {
+                    0xFFFE
+                }
+            }
+            InterruptType::NMI => 0xFFFA,
+        };
 
-        self.push_stack(flag.bits());
+        let mut status = self.status;
+        status.set(CpuFlags::BREAK, is_brk);
+        status.insert(CpuFlags::BREAK2);
+        self.push_stack(status.bits());
+
         self.status.insert(CpuFlags::INTR_DISABLE);
+        self.pc = self.read_u16(vector);
+    }
 
-        self.pc = self.read_u16(0xFFFA);
+    fn interrupt_nmi(&mut self) {
+        self.read_u8(self.pc);
+        self.read_u8(self.pc);
+        self.interrupt_sequence(InterruptType::NMI);
     }
 
     fn interrupt_irq(&mut self) {
-        self.tick(2);
-        self.push_stack_u16(self.pc);
-        let mut flag = self.status.clone();
-        flag.set(CpuFlags::BREAK, false);
-        flag.set(CpuFlags::BREAK2, true);
-
-        self.push_stack(flag.bits());
-        self.status.insert(CpuFlags::INTR_DISABLE);
-
-        self.pc = self.read_u16(0xFFFE);
+        self.read_u8(self.pc);
+        self.read_u8(self.pc);
+        self.interrupt_sequence(InterruptType::IRQ);
     }
 
     fn push_stack_u16(&mut self, val: u16) {
@@ -420,10 +458,8 @@ impl<'a> CPU<'a> {
             BPL => self.branch_if(!self.status.contains(CpuFlags::NEGATIVE)),
             BRK => {
                 self.read_u8(self.pc);
-                self.push_stack_u16(self.pc + 1);
-                self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
-                self.status.insert(CpuFlags::INTR_DISABLE);
-                self.pc = self.read_u16(0xFFFE);
+                self.pc += 1;
+                self.interrupt_sequence(InterruptType::BRK);
             }
             BVC => self.branch_if(!self.status.contains(CpuFlags::OVERFLOW)),
             BVS => self.branch_if(self.status.contains(CpuFlags::OVERFLOW)),

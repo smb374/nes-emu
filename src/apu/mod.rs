@@ -14,7 +14,7 @@ use self::{
 
 const CPU_FREQ: f64 = 1_789_773.0;
 const SAMPLE_RATE: f64 = 44_100.0;
-const FRAME_COUNTER_RATE: usize = 3728;
+const FC_STEPS: [usize; 5] = [3728, 7456, 11185, 14914, 18640];
 
 pub struct APU {
     pub status: APUStatus,
@@ -79,31 +79,34 @@ impl APU {
             self.pulse2.clock_timer(apu_ticks);
             self.noise.clock_timer(apu_ticks);
 
-            let old_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
+            let old_frame_cycle = self.frame_cycle;
             self.frame_cycle += apu_ticks;
 
-            let frame_length = if self.frame_counter.is_five_mode() {
-                FRAME_COUNTER_RATE * 5
+            let (max_step_idx, frame_length) = if self.frame_counter.is_five_mode() {
+                (4, FC_STEPS[4])
             } else {
-                FRAME_COUNTER_RATE * 4
+                (3, FC_STEPS[3])
             };
 
             if self.frame_cycle >= frame_length {
                 self.frame_cycle -= frame_length;
-            }
-
-            let new_quarter_frame = self.frame_cycle / FRAME_COUNTER_RATE;
-
-            if old_quarter_frame != new_quarter_frame {
-                self.clock_frame_sequencer(new_quarter_frame);
+                self.clock_frame_sequencer(max_step_idx);
+            } else {
+                for i in 0..max_step_idx {
+                    if old_frame_cycle < FC_STEPS[i] && self.frame_cycle >= FC_STEPS[i] {
+                        self.clock_frame_sequencer(i);
+                    }
+                }
             }
         }
 
         self.generate_samples(cycles);
 
-        // Check for DMC IRQ (can happen at any time)
-        if self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT) {
+        if self.dmc.irq_flag {
             self.status.insert(APUStatus::DMC_INTERRUPT);
+        }
+
+        if self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT) {
             self.irq_sig = true;
         }
 
@@ -128,6 +131,7 @@ impl APU {
 
                 self.status
                     .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                self.irq_sig = self.frame_counter.emit_irq();
             }
             4 if self.frame_counter.is_five_mode() => {
                 self.clock_envelopes();
@@ -196,11 +200,12 @@ impl APU {
         if self.irq_sig || self.status.contains(APUStatus::FRAME_INTERRUPT) {
             res |= 0x40;
         }
-        if self.dmc.irq_flag && self.status.contains(APUStatus::DMC_INTERRUPT) {
+        if self.dmc.irq_flag {
+            self.status.insert(APUStatus::DMC_INTERRUPT);
             res |= 0x80;
         }
         self.status.remove(APUStatus::FRAME_INTERRUPT);
-        self.irq_sig = false;
+        self.irq_sig = self.dmc.irq_flag;
         res
     }
 
@@ -240,6 +245,8 @@ impl APU {
         } else {
             self.dmc.stop(); // Sets bytes_remaining to 0
         }
+
+        self.irq_sig = self.status.contains(APUStatus::FRAME_INTERRUPT);
     }
 
     pub fn write_frame_counter(&mut self, value: u8) {
@@ -247,7 +254,7 @@ impl APU {
         self.frame_cycle = 0;
         if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
-            self.irq_sig = false;
+            self.irq_sig = self.dmc.irq_flag;
         }
 
         // If 5-step mode is set, immediately clock all units
