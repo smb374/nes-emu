@@ -142,7 +142,6 @@ fn main() {
                         keycode: Some(Keycode::Escape),
                         ..
                     } => {
-                        sdl2::mixer::close_audio();
                         return true;
                     }
                     Event::KeyDown { keycode, .. } => {
