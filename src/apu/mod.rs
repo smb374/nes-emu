@@ -37,6 +37,7 @@ pub struct APU {
     lpf14k: Filter<44100>,
 
     audio_queue: AudioQueue<f32>,
+    pending_frame_counter: Option<(u8, u8)>,
 }
 
 impl APU {
@@ -59,43 +60,31 @@ impl APU {
             hpf90: Filter::new(90.0, true),
             hpf442: Filter::new(442.0, true),
             lpf14k: Filter::new(14000.0, false),
+            pending_frame_counter: None,
             audio_queue,
         }
     }
 
     pub fn tick(&mut self, rom: &mut Rom, cycles: u16, oam_dma: bool) -> usize {
         let cycles = cycles as usize;
-        self.cycles += cycles;
+        let mut stall = 0;
 
-        let total_cycles = self.cycle_accumulator + cycles;
-        let apu_ticks = total_cycles / 2;
-        self.cycle_accumulator = total_cycles % 2;
+        for _ in 0..cycles {
+            self.cycles += 1;
 
-        self.triag.clock_timer(cycles);
-        let stall = self.dmc.clock_timer(cycles, rom, oam_dma);
-
-        if apu_ticks > 0 {
-            self.pulse1.clock_timer(apu_ticks);
-            self.pulse2.clock_timer(apu_ticks);
-            self.noise.clock_timer(apu_ticks);
-
-            let old_frame_cycle = self.frame_cycle;
-            self.frame_cycle += apu_ticks;
-
-            let (max_step_idx, frame_length) = if self.frame_counter.is_five_mode() {
-                (4, FC_STEPS[4])
-            } else {
-                (3, FC_STEPS[3])
-            };
-
-            if self.frame_cycle >= frame_length {
-                self.frame_cycle -= frame_length;
-                self.clock_frame_sequencer(max_step_idx);
-            } else {
-                for i in 0..max_step_idx {
-                    if old_frame_cycle < FC_STEPS[i] && self.frame_cycle >= FC_STEPS[i] {
-                        self.clock_frame_sequencer(i);
-                    }
+            self.triag.clock_timer(1);
+            stall += self.dmc.clock_timer(1, rom, oam_dma);
+            self.cycle_accumulator += 1;
+            if self.cycle_accumulator >= 2 {
+                self.cycle_accumulator = 0;
+                self.step_apu_sequencer();
+            }
+            if let Some((val, mut delay)) = self.pending_frame_counter.take() {
+                if delay != 0 {
+                    delay -= 1;
+                    self.pending_frame_counter = Some((val, delay));
+                } else {
+                    self.apply_frame_counter(val);
                 }
             }
         }
@@ -111,6 +100,32 @@ impl APU {
         }
 
         stall
+    }
+
+    fn step_apu_sequencer(&mut self) {
+        self.pulse1.clock_timer(1);
+        self.pulse2.clock_timer(1);
+        self.noise.clock_timer(1);
+
+        let old_frame_cycle = self.frame_cycle;
+        self.frame_cycle += 1;
+
+        let (max_step_idx, frame_length) = if self.frame_counter.is_five_mode() {
+            (4, FC_STEPS[4])
+        } else {
+            (3, FC_STEPS[3])
+        };
+
+        if self.frame_cycle >= frame_length {
+            self.frame_cycle -= frame_length;
+            self.clock_frame_sequencer(max_step_idx);
+        } else {
+            for i in 0..max_step_idx {
+                if old_frame_cycle < FC_STEPS[i] && self.frame_cycle >= FC_STEPS[i] {
+                    self.clock_frame_sequencer(i);
+                }
+            }
+        }
     }
 
     fn clock_frame_sequencer(&mut self, quarter_frame: usize) {
@@ -250,14 +265,18 @@ impl APU {
     }
 
     pub fn write_frame_counter(&mut self, value: u8) {
+        self.pending_frame_counter = Some((value, if self.cycles % 2 == 0 { 3 } else { 4 }));
+    }
+
+    fn apply_frame_counter(&mut self, value: u8) {
         self.frame_counter.update(value);
         self.frame_cycle = 0;
+
         if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
             self.irq_sig = self.dmc.irq_flag;
         }
 
-        // If 5-step mode is set, immediately clock all units
         if self.frame_counter.is_five_mode() {
             self.clock_envelopes();
             self.clock_length_and_sweep();
