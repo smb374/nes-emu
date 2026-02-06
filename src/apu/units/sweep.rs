@@ -25,13 +25,13 @@ impl Sweep {
     ) -> (u16, bool) {
         let delta = timer >> shamt;
         let target = if negate {
-            let neg_delta = (!delta).wrapping_add(if self.use_2c { 1 } else { 0 });
+            let neg_delta = (!delta).wrapping_add(self.use_2c as u16);
             timer.wrapping_add(neg_delta)
         } else {
             timer.wrapping_add(delta)
         };
 
-        let muted = timer < 8 || target > 0x7FF;
+        let muted = timer < 8 || (!negate && target > 0x7FF);
 
         let ntimer = if self.divide == 0 && enabled && !muted && shamt > 0 {
             target

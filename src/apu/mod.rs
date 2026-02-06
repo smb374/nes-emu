@@ -46,8 +46,8 @@ impl APU {
             frame_counter: FrameCounter::default(),
             irq_sig: false,
 
-            pulse1: PulseChannel::new(true),
-            pulse2: PulseChannel::new(false),
+            pulse1: PulseChannel::new(false),
+            pulse2: PulseChannel::new(true),
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),
@@ -244,6 +244,7 @@ impl APU {
 
     pub fn write_frame_counter(&mut self, value: u8) {
         self.frame_counter.update(value);
+        self.frame_cycle = 0;
         if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
             self.irq_sig = false;
