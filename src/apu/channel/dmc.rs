@@ -51,7 +51,7 @@ impl DMCChannel {
             rate_index: 0,
             output_level: 0,
             sample_address: 0xC000,
-            sample_length: 0,
+            sample_length: 1,
             timer_period: RATE_TABLE[0],
             timer_counter: RATE_TABLE[0],
             sample_buffer: 0,
@@ -60,7 +60,7 @@ impl DMCChannel {
             bits_remaining: 0,
             silence_flag: true,
             current_address: 0xC000,
-            bytes_remaining: 0,
+            bytes_remaining: 1,
             irq_flag: false,
         }
     }
