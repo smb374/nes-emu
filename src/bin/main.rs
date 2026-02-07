@@ -113,7 +113,7 @@ fn main() {
         eprintln!("Warning: Failed to load save file: {}", e);
     }
 
-    let mut next_frame_target = Instant::now();
+    let mut next_frame_target = Instant::now() + FRAME_DURATION;
 
     // run the game cycle
     let bus = Bus::new(
@@ -157,7 +157,6 @@ fn main() {
                     _ => { /* do nothing */ }
                 }
             }
-            next_frame_target += FRAME_DURATION;
 
             let now = Instant::now();
 
@@ -168,6 +167,8 @@ fn main() {
                     next_frame_target = now;
                 }
             }
+
+            next_frame_target += FRAME_DURATION;
             false
         },
     );
