@@ -1,4 +1,5 @@
 mod channel;
+mod mix_table;
 pub mod registers;
 mod units;
 
@@ -9,6 +10,7 @@ use crate::{apu::units::filter::Filter, cartridge::Rom};
 
 use self::{
     channel::{dmc::DMCChannel, noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
+    mix_table::*,
     registers::{APUStatus, FrameCounter},
 };
 
@@ -302,30 +304,14 @@ impl APU {
     }
 
     fn mix_channels(&mut self) -> f32 {
-        let pulse1_out = self.pulse1.output();
-        let pulse2_out = self.pulse2.output();
-        let triangle_out = self.triag.output();
-        let noise_out = self.noise.output();
-        let dmc_out = self.dmc.output();
+        let p1 = self.pulse1.output() as usize;
+        let p2 = self.pulse2.output() as usize;
+        let tri = self.triag.output() as usize;
+        let noise = self.noise.output() as usize;
+        let dmc = self.dmc.output() as usize;
 
-        let pulse_sum = pulse1_out + pulse2_out;
-        let pulse_out = if pulse_sum == 0 {
-            0.0
-        } else {
-            95.88 / (8128.0 / pulse_sum as f32 + 100.0)
-        };
-
-        let tnd_sum = triangle_out + noise_out + dmc_out;
-        let tnd_out = if tnd_sum == 0 {
-            0.0
-        } else {
-            159.79
-                / (1.0
-                    / ((triangle_out as f32 / 8227.0)
-                        + (noise_out as f32 / 12241.0)
-                        + (dmc_out as f32 / 22638.0))
-                    + 100.0)
-        };
+        let pulse_out = PULSE_TABLE[p1 + p2];
+        let tnd_out = TND_TABLE[3 * tri + 2 * noise + dmc];
 
         let output = (pulse_out + tnd_out - 0.5) * 2.0;
 
