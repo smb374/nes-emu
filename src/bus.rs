@@ -1,4 +1,4 @@
-use sdl2::audio::AudioQueue;
+use cpal::Device;
 
 use crate::{
     Mem,
@@ -59,12 +59,12 @@ pub struct Bus<'call> {
 }
 
 impl<'call> Bus<'call> {
-    pub fn new<F>(rom: Rom, audio_queue: AudioQueue<f32>, f: F) -> Self
+    pub fn new<F>(rom: Rom, device: Device, f: F) -> Self
     where
         F: FnMut(&PPU, &mut Joypad) -> bool + 'call,
     {
         let ppu = PPU::new();
-        let apu = APU::new(audio_queue);
+        let apu = APU::new(device);
         Self {
             vram: [0u8; 0x800],
             rom,

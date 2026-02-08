@@ -3,8 +3,13 @@ mod mix_table;
 pub mod registers;
 mod units;
 
+use std::sync::mpsc::{self, SyncSender, TryRecvError};
+
 pub use channel::TimedChannel;
-use sdl2::audio::AudioQueue;
+use cpal::{
+    Device, Stream, StreamConfig,
+    traits::{DeviceTrait, StreamTrait},
+};
 
 use crate::{apu::units::filter::Filter, cartridge::Rom};
 
@@ -14,8 +19,8 @@ use self::{
     registers::{APUStatus, FrameCounter},
 };
 
-const CPU_FREQ: f64 = 1_789_773.0;
-const SAMPLE_RATE: f64 = 44_100.0;
+const CPU_FREQ: u32 = 1_789_773;
+const SAMPLE_RATE: u32 = 44_100;
 const FC_STEPS0: [usize; 4] = [7456, 7458, 7458, 7458];
 const FC_STEPS1: [usize; 5] = [7458, 7456, 7458, 7458, 7452];
 const FC_RELOAD0: usize = 7459;
@@ -37,16 +42,47 @@ pub struct APU {
     cycle_accumulator: usize,
 
     sample_accumulator: f64,
+    sample_tx: SyncSender<f32>,
     hpf90: Filter<44100>,
     hpf442: Filter<44100>,
     lpf14k: Filter<44100>,
 
-    audio_queue: AudioQueue<f32>,
+    _stream: Stream,
     pending_frame_counter: Option<(u8, u8)>,
 }
 
 impl APU {
-    pub fn new(audio_queue: AudioQueue<f32>) -> Self {
+    pub fn new(device: Device) -> Self {
+        let stream_config = StreamConfig {
+            channels: 1,
+            sample_rate: SAMPLE_RATE,
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        let (tx, rx) = mpsc::sync_channel(SAMPLE_RATE as usize * 2);
+
+        let stream = device
+            .build_output_stream(
+                &stream_config,
+                move |data: &mut [f32], _| {
+                    for i in 0..data.len() {
+                        match rx.try_recv() {
+                            Ok(sample) => {
+                                data[i] = sample;
+                            }
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => {
+                                panic!("Shouldn't be disconnected here!")
+                            }
+                        }
+                    }
+                },
+                |err| log::warn!("[Stream] stream error: {}", err),
+                None,
+            )
+            .expect("Failed to create output stream");
+        stream.play().expect("Failed to start stream");
+
         Self {
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
@@ -63,11 +99,12 @@ impl APU {
             frame_step: 0,
             frame_delay: FC_RELOAD0,
             sample_accumulator: 0.0,
+            sample_tx: tx,
             hpf90: Filter::new(90.0, true),
             hpf442: Filter::new(442.0, true),
             lpf14k: Filter::new(14000.0, false),
             pending_frame_counter: None,
-            audio_queue,
+            _stream: stream,
         }
     }
 
@@ -200,16 +237,13 @@ impl APU {
     }
 
     fn generate_samples(&mut self, cycles: usize) {
-        self.sample_accumulator += cycles as f64 * SAMPLE_RATE / CPU_FREQ;
+        self.sample_accumulator += cycles as f64 * SAMPLE_RATE as f64 / CPU_FREQ as f64;
         let samples_to_generate = self.sample_accumulator as usize;
 
-        let mut buf = Vec::with_capacity(2048);
-
         for _ in 0..samples_to_generate {
-            buf.push(self.mix_channels());
+            let sample = self.mix_channels();
+            self.sample_tx.send(sample).expect("Should be able to send");
         }
-
-        self.audio_queue.queue_audio(&buf).unwrap();
 
         self.sample_accumulator -= samples_to_generate as f64;
     }

@@ -6,6 +6,7 @@ use std::{
 };
 
 use clap::Parser;
+use cpal::traits::HostTrait;
 use env_logger::Env;
 use nes_emu::{
     bus::Bus,
@@ -15,12 +16,7 @@ use nes_emu::{
     ppu::PPU,
 };
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal};
-use sdl2::{
-    audio::{AudioQueue, AudioSpecDesired},
-    event::Event,
-    keyboard::Keycode,
-    pixels::PixelFormatEnum,
-};
+use sdl2::{event::Event, keyboard::Keycode, pixels::PixelFormatEnum};
 
 const FRAME_DURATION: Duration = Duration::from_micros(16639);
 const OVERSCAN_LEFT: usize = 0;
@@ -91,17 +87,8 @@ fn main() {
     canvas.clear();
     canvas.present();
 
-    let desired_spec = AudioSpecDesired {
-        freq: Some(44100),
-        channels: Some(1),
-        samples: Some(1024),
-    };
-    let audio_device: AudioQueue<f32> = sdl_context
-        .audio()
-        .unwrap()
-        .open_queue(None, &desired_spec)
-        .unwrap();
-    audio_device.resume();
+    let host = cpal::default_host();
+    let device = host.default_output_device().expect("No available device");
 
     //load the game
     let path = std::path::absolute(&args.rom_path).expect("Failed to get absolute path");
@@ -118,7 +105,7 @@ fn main() {
     // run the game cycle
     let bus = Bus::new(
         rom,
-        audio_device,
+        device,
         move |ppu: &PPU, joypad: &mut joypad::Joypad| {
             texture
                 .with_lock(None, |buffer: &mut [u8], pitch: usize| {
