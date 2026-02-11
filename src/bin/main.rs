@@ -2,10 +2,7 @@ use std::{
     collections::HashMap,
     ffi::c_int,
     io::Write,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex, atomic::Ordering},
     time::{Duration, Instant},
 };
 
@@ -73,10 +70,7 @@ fn main() {
     }));
     let (input_tx, input_rx) = std::sync::mpsc::channel::<InputEvent>();
 
-    let emu_exited = Arc::new(AtomicBool::new(false));
-
     let fb_emu = Arc::clone(&frame_buffer);
-    let emu_exited_clone = Arc::clone(&emu_exited);
     let emu_thread = std::thread::spawn(move || {
         let host = cpal::default_host();
         let device = host.default_output_device().expect("No available device");
@@ -139,8 +133,6 @@ fn main() {
         if let Err(e) = cpu.save_prg_ram() {
             log::warn!("Warning: Failed to save PRG-RAM: {}", e);
         }
-
-        emu_exited_clone.store(true, Ordering::Release);
     });
 
     let native_options = eframe::NativeOptions {
