@@ -10,9 +10,9 @@ clap = { version = "^4", features = ["derive"] }
 log = "^0.4"
 env_logger = "^0.11"
 nix = { version = "^0.30", default-features = false, features = ["signal"] }
-cpal = "0.17.1"
-eframe = "0.33.3"
-egui = "0.33.3"
+cpal = "0.17"
+eframe = "0.33"
+egui = "0.33"
 
 [[bin]]
 name = "emulator"
