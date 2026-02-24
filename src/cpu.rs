@@ -593,7 +593,7 @@ impl<'a> CPU<'a> {
                 }
             }
             NOP => {
-                self.tick(1);
+                self.read_u8(self.pc);
             }
             ORA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
@@ -807,7 +807,8 @@ impl<'a> CPU<'a> {
             AXA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
                 let addr = addr_opt.unwrap();
-                let res = self.reg_a & self.reg_x & 7;
+                let hi = ((addr >> 8) as u8).wrapping_add(1);
+                let res = self.reg_a & self.reg_x & hi;
                 self.write_u8(addr, res);
             }
             AXS => {
@@ -833,8 +834,8 @@ impl<'a> CPU<'a> {
                 self.update_nz(res);
             }
             DOP => {
-                let _ = self.operand_addr(op.mode, InstructionType::Read);
-                self.tick(1);
+                let addr = self.operand_addr(op.mode, InstructionType::Read);
+                self.read_u8(addr.unwrap_or(self.pc));
             }
             ISC => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
@@ -986,8 +987,8 @@ impl<'a> CPU<'a> {
                 self.write_u8(write_addr, res);
             }
             TOP => {
-                let _ = self.operand_addr(op.mode, InstructionType::Read);
-                self.tick(1);
+                let addr = self.operand_addr(op.mode, InstructionType::Read);
+                self.read_u8(addr.unwrap_or(self.pc));
             }
             XAA => {
                 self.reg_a = self.reg_x;

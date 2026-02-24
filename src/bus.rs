@@ -51,6 +51,8 @@ pub struct Bus<'call> {
     oam_dma: bool,
     oam_dma_remain: u16,
 
+    cpu_bus: u8,
+    ppu_bus: u8,
     cycles: usize,
     cycles_acc: usize,
     joypad1: Joypad,
@@ -73,6 +75,8 @@ impl<'call> Bus<'call> {
             oam_dma: false,
             oam_dma_remain: 0,
 
+            cpu_bus: 0,
+            ppu_bus: 0,
             joypad1: Joypad::new(),
             joypad2: Joypad::new(),
             cycles: 0,
@@ -97,6 +101,7 @@ impl<'call> Bus<'call> {
             let frame_after = self.ppu.frames;
 
             if frame_before != frame_after {
+                self.ppu_bus = 0;
                 if (self.cb)(&self.ppu, &mut self.joypad1) {
                     return (false, true);
                 }
@@ -128,69 +133,91 @@ impl<'call> Mem for Bus<'call> {
         match addr {
             RAM_BASE..=RAM_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x7FF;
-                self.vram[mirror_down_addr as usize]
+                self.cpu_bus = self.vram[mirror_down_addr as usize];
+                self.cpu_bus
             }
-            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 | 0x4014 => {
-                // panic!("Attempt to read from write-only PPU address {:x}", addr);
-                0
+            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => {
+                self.cpu_bus = self.ppu_bus;
+                self.cpu_bus
             }
-            0x2002 => self.ppu.read_status(),
-            0x2004 => self.ppu.read_oam_data(),
-            0x2007 => self.ppu.read_data(&mut self.rom),
-
-            0x4000..=0x4014 => {
-                // Open Bus
-                0
+            0x2002 => {
+                let status = self.ppu.read_status();
+                self.ppu_bus = (status & 0xe0) | (self.ppu_bus & 0x1f);
+                self.cpu_bus = self.ppu_bus;
+                self.cpu_bus
             }
-
-            0x4015 => self.apu.read_status(),
-
-            0x4016 => self.joypad1.read(),
-            0x4017 => 0x40, // $4017 is write-only, return open bus
-
+            0x2004 => {
+                self.ppu_bus = self.ppu.read_oam_data();
+                self.cpu_bus = self.ppu_bus;
+                self.cpu_bus
+            }
+            0x2007 => {
+                self.ppu_bus = self.ppu.read_data(&mut self.rom);
+                self.cpu_bus = self.ppu_bus;
+                self.cpu_bus
+            }
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x2007;
                 self.read_u8(mirror_down_addr)
             }
-            0x6000..=0xFFFF => self.rom.read_prg(addr),
 
-            _ => {
-                // eprintln!("Ignoring mem access at {}", addr);
-                0
+            0x4000..=0x4014 => self.cpu_bus,
+
+            0x4015 => (self.cpu_bus & 0x20) | (self.apu.read_status() & 0xd0),
+
+            0x4016 => {
+                self.cpu_bus = (self.cpu_bus & 0xe0) | (self.joypad1.read() & 0x1f);
+                self.cpu_bus
+            }
+            0x4017 => {
+                self.cpu_bus &= 0xe0;
+                self.cpu_bus
+            }
+            0x4018..=0x5FFF => self.cpu_bus,
+            0x6000..=0xFFFF => {
+                self.cpu_bus = self.rom.read_prg(addr);
+                self.cpu_bus
             }
         }
     }
 
     fn write_u8(&mut self, addr: u16, data: u8) {
+        self.cpu_bus = data;
         match addr {
             RAM_BASE..=RAM_MIRRORS_END => {
                 let mirror_down_addr = addr & 0x7FF;
                 self.vram[mirror_down_addr as usize] = data;
             }
-            0x2000 => {
-                self.ppu.write_to_ctrl(data);
-            }
-            0x2001 => {
-                self.ppu.write_to_mask(data);
-            }
+            0x2000..=0x2007 => {
+                self.ppu_bus = data;
+                match addr {
+                    0x2000 => {
+                        self.ppu.write_to_ctrl(data);
+                    }
+                    0x2001 => {
+                        self.ppu.write_to_mask(data);
+                    }
 
-            0x2002 => {}
+                    0x2002 => {}
 
-            0x2003 => {
-                self.ppu.write_to_oam_addr(data);
-            }
-            0x2004 => {
-                self.ppu.write_to_oam_data(data);
-            }
-            0x2005 => {
-                self.ppu.write_to_scroll(data);
-            }
+                    0x2003 => {
+                        self.ppu.write_to_oam_addr(data);
+                    }
+                    0x2004 => {
+                        self.ppu.write_to_oam_data(data);
+                    }
+                    0x2005 => {
+                        self.ppu.write_to_scroll(data);
+                    }
 
-            0x2006 => {
-                self.ppu.write_to_ppu_addr(&mut self.rom, data);
-            }
-            0x2007 => {
-                self.ppu.write_data(&mut self.rom, data);
+                    0x2006 => {
+                        self.ppu.write_to_ppu_addr(&mut self.rom, data);
+                    }
+                    0x2007 => {
+                        self.ppu.write_data(&mut self.rom, data);
+                    }
+                    _ => unreachable!(),
+                }
             }
 
             0x2008..=PPU_REGISTERS_MIRRORS_END => {
