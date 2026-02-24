@@ -41,6 +41,8 @@ pub struct DMCChannel {
 
     // IRQ flag
     pub irq_flag: bool,
+
+    pub dma_val: Option<u8>,
 }
 
 impl DMCChannel {
@@ -62,6 +64,7 @@ impl DMCChannel {
             current_address: 0xC000,
             bytes_remaining: 1,
             irq_flag: false,
+            dma_val: None,
         }
     }
 
@@ -127,6 +130,7 @@ impl DMCChannel {
             if self.sample_buffer_empty && self.bytes_remaining > 0 {
                 // Read from CPU memory
                 self.sample_buffer = rom.read_prg(self.current_address);
+                self.dma_val = Some(self.sample_buffer);
 
                 // DMC DMA timing: varies based on OAM DMA state
                 // - Normal: 4 cycles (1 dummy read + alignment + get)

@@ -95,6 +95,9 @@ impl<'call> Bus<'call> {
             }
         }
         let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
+        if let Some(v) = self.apu.dmc.dma_val.take() {
+            self.cpu_bus = v;
+        }
         for _ in 0..cycles {
             let frame_before = self.ppu.frames;
             self.ppu.tick(&mut self.rom, 3);
