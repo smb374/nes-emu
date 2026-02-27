@@ -42,7 +42,15 @@ Currently only supports single controller with static binding:
 | Space      | Select     |
 | Arrow keys | D-Pad      |
 
-## Screenshots
+## Test Results
+
+AccuracyCoin run all result screen:
+![AccuracyCoin Result](./screenshots/AccuracyCoinResult.png)
+
+AccuracyCoin sprite flags individual run result:
+![AccuracyCoin Sprite Flag Result](./screenshots/AccuracyCoinSpriteResult.png)
+
+## Gameplay Screenshots
 
 ![Battletoads Map](./screenshots/battletoads_stage_map.png)
 ![Battletoads Turbo Tunnel](./screenshots/battletoads_turbo_tunnel.png)
