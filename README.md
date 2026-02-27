@@ -1,2 +1,62 @@
 # nes-emu
+
 A NES emu in Rust
+
+## Features
+
+- Implements full CPU instruction emulation.
+- Passing 92* tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
+- Support iNES mapper 0-4, 7
+- Accurate PPU VBLANK timing & NMI control
+- Plays Battletoads
+- Battery save support through whole RAM snapshot
+
+*: Sprite 0 Hit & Sprite Overflow fails when running all tests but succeeds when running individually.
+
+## Building
+
+Make sure you have SDL2 installed for the main branch (egui is used in separated branch)
+for static linking, other than that just run:
+
+```sh
+cargo build --release
+```
+
+To build the emulator then use
+
+```sh
+./target/release/emulator <rom path>
+```
+
+To start the emulator and load the ROM.
+
+## Bindings
+
+Currently only supports single controller with static binding:
+
+| Key        | Controller |
+|------------|------------|
+| Z          | A          |
+| X          | B          |
+| Return     | Start      |
+| Space      | Select     |
+| Arrow keys | D-Pad      |
+
+## Screenshots
+
+![Battletoads Map](./screenshots/battletoads_stage_map.png)
+![Battletoads Turbo Tunnel](./screenshots/battletoads_turbo_tunnel.png)
+![Crystalis](./screenshots/crystalis.png)
+![Ninja Gaiden](./screenshots/ninja_gaiden.png)
+![Zelda](./screenshots/zelda.png)
+
+## Roadmap
+
+- [ ] Implement DMA accuracy with RDY line control and have cycle alignment rather than current hard-coded stuff
+- [ ] Implement correct instruction behavior for SHA, SHS, SHX, SHY to account RDY line assertion when DMA occurrence
+- [ ] Improve NMI overlapping behavior
+- [ ] Improve PPU accuracy
+- [ ] Improve APU accuracy
+- [ ] Add randomized RAM initialization for components
+- [ ] Add widgets for emulator UI
+- [ ] Add save state support
