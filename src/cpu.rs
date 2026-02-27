@@ -805,11 +805,52 @@ impl<'a> CPU<'a> {
                 self.update_nz(self.reg_a);
             }
             AXA => {
-                let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
-                let addr = addr_opt.unwrap();
-                let hi = ((addr >> 8) as u8).wrapping_add(1);
-                let res = self.reg_a & self.reg_x & hi;
-                self.write_u8(addr, res);
+                match op.mode {
+                    Some(ABSY) => {
+                        let lo = self.read_u8(self.pc) as u16;
+                        let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+
+                        let base = (hi << 8) | lo;
+                        let addr = base.wrapping_add(self.reg_y as u16);
+                        let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
+
+                        let wrong_addr = (hi << 8) | ((lo + self.reg_y as u16) & 0xFF);
+                        self.read_u8(wrong_addr);
+
+                        let res = self.reg_a & self.reg_x & ((hi as u8).wrapping_add(1));
+
+                        let write_addr = if page_crossed {
+                            ((res as u16) << 8) | (addr & 0xFF)
+                        } else {
+                            addr
+                        };
+                        self.write_u8(write_addr, res);
+                    }
+                    Some(INDY) => {
+                        let ptr = self.read_u8(self.pc);
+                        let lo = self.read_u8(ptr as u16) as u16;
+                        let hi = self.read_u8(ptr.wrapping_add(1) as u16) as u16;
+
+                        let base = (hi << 8) | lo;
+                        let addr = base.wrapping_add(self.reg_y as u16);
+                        let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
+
+                        // Always do dummy read for write operations
+                        let wrong_addr = (hi << 8) | ((lo + self.reg_y as u16) & 0xFF);
+                        self.read_u8(wrong_addr);
+
+                        let res = self.reg_a & self.reg_x & ((hi as u8).wrapping_add(1));
+
+                        // If page crossed, the actual address written is also affected
+                        let write_addr = if page_crossed {
+                            ((res as u16) << 8) | (addr & 0xFF)
+                        } else {
+                            addr
+                        };
+                        self.write_u8(write_addr, res);
+                    }
+                    _ => unreachable!(),
+                }
             }
             AXS => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
@@ -999,12 +1040,29 @@ impl<'a> CPU<'a> {
                 self.update_nz(self.reg_a);
             }
             XAS => {
+                // XAS abs,Y - Transfer A AND X to SP, then store in memory
                 self.sp = self.reg_x & self.reg_a;
-                let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
-                let addr = addr_opt.unwrap();
-                let hi = ((addr >> 8) as u8).wrapping_add(1);
-                let res = self.sp & hi;
-                self.write_u8(addr, res);
+
+                let lo = self.read_u8(self.pc) as u16;
+                let hi = self.read_u8(self.pc.wrapping_add(1)) as u16;
+
+                let base = (hi << 8) | lo;
+                let addr = base.wrapping_add(self.reg_y as u16);
+                let page_crossed = (base & 0xFF00) != (addr & 0xFF00);
+
+                // Always do dummy read for write operations
+                let wrong_addr = (hi << 8) | ((lo + self.reg_y as u16) & 0xFF);
+                self.read_u8(wrong_addr);
+
+                let res = self.sp & ((hi as u8).wrapping_add(1));
+
+                // If page crossed, the actual address written is also affected
+                let write_addr = if page_crossed {
+                    ((res as u16) << 8) | (addr & 0xFF)
+                } else {
+                    addr
+                };
+                self.write_u8(write_addr, res);
             }
         }
     }
