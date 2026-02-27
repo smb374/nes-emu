@@ -52,8 +52,10 @@ Currently only supports single controller with static binding:
 
 ## Roadmap
 
-- [ ] Implement DMA accuracy with RDY line control and have cycle alignment rather than current hard-coded stuff
-- [ ] Implement correct instruction behavior for SHA, SHS, SHX, SHY to account RDY line assertion when DMA occurrence
+- [ ] Improve DMA accuracy by implementing RDY line control, get/put cycles, and
+  cycle alignment rather than current hard-coded stuff
+- [ ] Implement correct instruction behavior for SHA, SHS, SHX, SHY to
+  account for RDY line assertion when DMA occurrence
 - [ ] Improve NMI overlapping behavior
 - [ ] Improve PPU accuracy
 - [ ] Improve APU accuracy
