@@ -108,38 +108,33 @@ impl APU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u16, oam_dma: bool) -> usize {
-        let cycles = cycles as usize;
-        let mut stall = 0;
-
-        for _ in 0..cycles {
-            self.cycles += 1;
-            if let Some((val, mut delay)) = self.pending_frame_counter.take() {
-                if delay != 0 {
-                    delay -= 1;
-                }
-                if delay == 0 {
-                    self.apply_frame_counter(val);
-                } else {
-                    self.pending_frame_counter = Some((val, delay));
-                }
+    pub fn tick(&mut self, rom: &mut Rom) {
+        self.cycles += 1;
+        if let Some((val, mut delay)) = self.pending_frame_counter.take() {
+            if delay != 0 {
+                delay -= 1;
             }
-
-            self.step_frame_sequencer();
-
-            self.triag.clock_timer(1);
-            stall += self.dmc.clock_timer(1, rom, oam_dma);
-
-            self.cycle_accumulator += 1;
-            self.cycle_accumulator &= 1;
-            if self.cycle_accumulator == 0 {
-                self.pulse1.clock_timer(1);
-                self.pulse2.clock_timer(1);
-                self.noise.clock_timer(1);
+            if delay == 0 {
+                self.apply_frame_counter(val);
+            } else {
+                self.pending_frame_counter = Some((val, delay));
             }
         }
 
-        self.generate_samples(cycles);
+        self.step_frame_sequencer();
+
+        self.triag.clock_timer(1);
+        self.dmc.clock_timer(1, rom);
+
+        self.cycle_accumulator += 1;
+        self.cycle_accumulator &= 1;
+        if self.cycle_accumulator == 0 {
+            self.pulse1.clock_timer(1);
+            self.pulse2.clock_timer(1);
+            self.noise.clock_timer(1);
+        }
+
+        self.generate_samples(1);
 
         if self.dmc.irq_flag {
             self.status.insert(APUStatus::DMC_INTERRUPT);
@@ -148,8 +143,6 @@ impl APU {
         if self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT) {
             self.irq_sig = true;
         }
-
-        stall
     }
 
     fn step_frame_sequencer(&mut self) {

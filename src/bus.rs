@@ -48,9 +48,8 @@ pub struct Bus<'call> {
     pub ppu: PPU,
     apu: APU,
 
-    oam_dma: bool,
-    oam_dma_remain: u16,
-
+    put_cycle: bool,
+    cpu_writing: bool,
     cpu_bus: u8,
     ppu_bus: u8,
     cycles: usize,
@@ -72,9 +71,9 @@ impl<'call> Bus<'call> {
             rom,
             ppu,
             apu,
-            oam_dma: false,
-            oam_dma_remain: 0,
 
+            put_cycle: false,
+            cpu_writing: false,
             cpu_bus: 0,
             ppu_bus: 0,
             joypad1: Joypad::new(),
@@ -85,41 +84,29 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self, cycles: u16) -> (bool, bool) {
-        self.cycles += cycles as usize;
-
-        if self.oam_dma_remain > 0 {
-            self.oam_dma_remain = self.oam_dma_remain.saturating_sub(cycles);
-            if self.oam_dma_remain == 0 {
-                self.oam_dma = false;
-            }
-        }
-        let stall = self.apu.tick(&mut self.rom, cycles, self.oam_dma);
+    pub fn tick(&mut self) -> (bool, bool) {
+        self.cycles += 1;
+        self.put_cycle = !self.put_cycle;
+        self.apu.tick(&mut self.rom);
         if let Some(v) = self.apu.dmc.dma_val.take() {
             self.cpu_bus = v;
         }
-        for _ in 0..cycles {
-            let frame_before = self.ppu.frames;
-            self.ppu.tick(&mut self.rom, 3);
-            let frame_after = self.ppu.frames;
+        let frame_before = self.ppu.frames;
+        self.ppu.tick(&mut self.rom);
+        let frame_after = self.ppu.frames;
 
-            if frame_before != frame_after {
-                self.ppu_bus = 0;
-                if (self.cb)(&self.ppu, &mut self.joypad1) {
-                    return (false, true);
-                }
+        if frame_before != frame_after {
+            self.ppu_bus = 0;
+            if (self.cb)(&self.ppu, &mut self.joypad1) {
+                return (false, true);
             }
         }
 
-        if stall != 0 {
-            self.tick(stall as u16)
-        } else {
-            let mapper_irq = self.rom.irq_sig;
-            self.rom.irq_sig = false;
-            let apu_irq = self.apu.irq_sig;
-            self.apu.irq_sig = false;
-            (mapper_irq || apu_irq, false)
-        }
+        let mapper_irq = self.rom.irq_sig;
+        self.rom.irq_sig = false;
+        let apu_irq = self.apu.irq_sig;
+        self.apu.irq_sig = false;
+        (mapper_irq || apu_irq, false)
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
@@ -128,6 +115,10 @@ impl<'call> Bus<'call> {
 
     pub fn save_prg_ram(&self) -> Result<(), String> {
         self.rom.save_prg_ram()
+    }
+
+    pub fn set_writing(&mut self, writing: bool) {
+        self.cpu_writing = writing;
     }
 }
 
@@ -256,19 +247,19 @@ impl<'call> Mem for Bus<'call> {
             // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
             0x4014 => {
                 let hi: u16 = (data as u16) << 8;
-                let add_cycles: u16 = if self.cycles % 2 == 1 { 2 } else { 1 };
-                self.oam_dma = true;
-                self.oam_dma_remain = 512 + add_cycles;
-
-                // Halt + optional alignment cycles
-                self.tick(add_cycles);
+                if self.cycles % 2 == 1 {
+                    self.tick();
+                    self.tick();
+                } else {
+                    self.tick();
+                }
 
                 // 256 get/put pairs - write happens during the put cycle
                 for i in 0..256u16 {
                     let byte = self.read_u8(hi + i); // Get cycle (read from memory)
-                    self.tick(1);
+                    self.tick();
                     self.ppu.write_to_oam_data(byte); // Put cycle (write to $2004)
-                    self.tick(1);
+                    self.tick();
                 }
             }
 

@@ -135,8 +135,8 @@ impl PPU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom, cycles: u16) {
-        for _ in 0..cycles {
+    pub fn tick(&mut self, rom: &mut Rom) {
+        for _ in 0..3 {
             let rendering_enabled = self.mask.show_background() || self.mask.show_sprites();
 
             self.advance_cycle();

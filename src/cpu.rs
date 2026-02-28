@@ -77,12 +77,14 @@ pub struct CPU<'a> {
 
 impl<'a> Mem for CPU<'a> {
     fn read_u8(&mut self, addr: u16) -> u8 {
-        self.tick(1);
+        self.bus.set_writing(false);
+        self.tick();
         self.bus.read_u8(addr)
     }
     fn write_u8(&mut self, addr: u16, val: u8) {
+        self.bus.set_writing(true);
         self.bus.write_u8(addr, val);
-        self.tick(1);
+        self.tick();
     }
 }
 
@@ -113,7 +115,9 @@ impl<'a> CPU<'a> {
         self.status = CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE;
         self.cycles = 0;
 
-        self.tick(5);
+        for _ in 0..5 {
+            self.tick();
+        }
         self.pc = self.read_u16(0xFFFC);
     }
 
@@ -179,13 +183,13 @@ impl<'a> CPU<'a> {
         }
     }
 
-    fn tick(&mut self, cycles: u16) {
+    fn tick(&mut self) {
         if !self.tick_disable {
-            let (irq, exit) = self.bus.tick(cycles);
+            let (irq, exit) = self.bus.tick();
             self.irq_sig |= irq;
             self.exit_sig |= exit;
 
-            self.cycles += cycles as usize;
+            self.cycles += 1;
             if self.nmi_latch.is_none() {
                 self.nmi_latch = self.bus.poll_nmi_status();
             }
@@ -264,7 +268,7 @@ impl<'a> CPU<'a> {
         if condition {
             // Dummy read while adding offset to PCL
             self.bus.read_u8(self.pc);
-            self.tick(1);
+            self.tick();
 
             let old_pc = self.pc;
             let new_pc = self.pc.wrapping_add_signed(offset);
@@ -273,7 +277,7 @@ impl<'a> CPU<'a> {
                 // Another dummy read from wrong address
                 let wrong_pc = (old_pc & 0xFF00) | (new_pc & 0x00FF);
                 self.bus.read_u8(wrong_pc);
-                self.tick(1);
+                self.tick();
             }
             self.pc = new_pc;
         }
@@ -429,7 +433,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, (self.reg_a & 0x80) != 0);
                     self.reg_a <<= 1;
                     self.update_nz(self.reg_a);
-                    self.tick(1);
+                    self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
                     let addr = addr_opt.unwrap();
@@ -465,19 +469,19 @@ impl<'a> CPU<'a> {
             BVS => self.branch_if(self.status.contains(CpuFlags::OVERFLOW)),
             CLC => {
                 self.status &= !CpuFlags::CARRY;
-                self.tick(1);
+                self.tick();
             }
             CLD => {
                 self.status &= !CpuFlags::DECIMAL;
-                self.tick(1);
+                self.tick();
             }
             CLI => {
                 self.status &= !CpuFlags::INTR_DISABLE;
-                self.tick(1);
+                self.tick();
             }
             CLV => {
                 self.status &= !CpuFlags::OVERFLOW;
-                self.tick(1);
+                self.tick();
             }
             CMP => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
@@ -512,12 +516,12 @@ impl<'a> CPU<'a> {
             DEX => {
                 self.reg_x = self.reg_x.wrapping_sub(1);
                 self.update_nz(self.reg_x);
-                self.tick(1);
+                self.tick();
             }
             DEY => {
                 self.reg_y = self.reg_y.wrapping_sub(1);
                 self.update_nz(self.reg_y);
-                self.tick(1);
+                self.tick();
             }
             EOR => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
@@ -537,12 +541,12 @@ impl<'a> CPU<'a> {
             INX => {
                 self.reg_x = self.reg_x.wrapping_add(1);
                 self.update_nz(self.reg_x);
-                self.tick(1);
+                self.tick();
             }
             INY => {
                 self.reg_y = self.reg_y.wrapping_add(1);
                 self.update_nz(self.reg_y);
-                self.tick(1);
+                self.tick();
             }
             JMP => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
@@ -552,7 +556,7 @@ impl<'a> CPU<'a> {
                 let lo = self.read_u8(self.pc) as u16;
                 self.pc = self.pc.wrapping_add(1);
                 self.bus.read_u8(STACK_BASE + self.sp as u16);
-                self.tick(1);
+                self.tick();
                 self.push_stack_u16(self.pc);
                 let hi = self.read_u8(self.pc) as u16;
                 self.pc = (hi << 8) | lo;
@@ -580,7 +584,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, (self.reg_a & 0x01) != 0);
                     self.reg_a >>= 1;
                     self.update_nz(self.reg_a);
-                    self.tick(1);
+                    self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
                     let addr = addr_opt.unwrap();
@@ -603,23 +607,25 @@ impl<'a> CPU<'a> {
             }
             PHA => {
                 self.push_stack(self.reg_a);
-                self.tick(1);
+                self.tick();
             }
             PHP => {
                 self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
-                self.tick(1);
+                self.tick();
             }
             PLA => {
                 self.reg_a = self.pop_stack();
                 self.update_nz(self.reg_a);
-                self.tick(2);
+                self.tick();
+                self.tick();
             }
             PLP => {
                 let mut status = CpuFlags::from_bits_retain(self.pop_stack());
                 status &= !CpuFlags::BREAK;
                 status |= CpuFlags::BREAK2;
                 self.status = status;
-                self.tick(2);
+                self.tick();
+                self.tick();
             }
             ROL => {
                 let ocar = self.status.contains(CpuFlags::CARRY);
@@ -628,7 +634,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, car);
                     self.reg_a = res;
                     self.update_nz(self.reg_a);
-                    self.tick(1);
+                    self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
                     let addr = addr_opt.unwrap();
@@ -647,7 +653,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, car);
                     self.reg_a = res;
                     self.update_nz(self.reg_a);
-                    self.tick(1);
+                    self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
                     let addr = addr_opt.unwrap();
@@ -660,7 +666,8 @@ impl<'a> CPU<'a> {
                 }
             }
             RTI => {
-                self.tick(2);
+                self.tick();
+                self.tick();
                 let mut status = CpuFlags::from_bits_retain(self.pop_stack());
                 status &= !CpuFlags::BREAK;
                 status |= CpuFlags::BREAK2;
@@ -668,9 +675,10 @@ impl<'a> CPU<'a> {
                 self.pc = self.pop_stack_u16();
             }
             RTS => {
-                self.tick(2);
+                self.tick();
+                self.tick();
                 self.pc = self.pop_stack_u16() + 1;
-                self.tick(1);
+                self.tick();
             }
             SBC => {
                 // ADC with inverted operand
@@ -693,15 +701,15 @@ impl<'a> CPU<'a> {
             }
             SEC => {
                 self.status |= CpuFlags::CARRY;
-                self.tick(1);
+                self.tick();
             }
             SED => {
                 self.status |= CpuFlags::DECIMAL;
-                self.tick(1);
+                self.tick();
             }
             SEI => {
                 self.status |= CpuFlags::INTR_DISABLE;
-                self.tick(1);
+                self.tick();
             }
             STA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
@@ -721,31 +729,31 @@ impl<'a> CPU<'a> {
             TAX => {
                 self.reg_x = self.reg_a;
                 self.update_nz(self.reg_x);
-                self.tick(1);
+                self.tick();
             }
             TAY => {
                 self.reg_y = self.reg_a;
                 self.update_nz(self.reg_y);
-                self.tick(1);
+                self.tick();
             }
             TSX => {
                 self.reg_x = self.sp;
                 self.update_nz(self.reg_x);
-                self.tick(1);
+                self.tick();
             }
             TXA => {
                 self.reg_a = self.reg_x;
                 self.update_nz(self.reg_a);
-                self.tick(1);
+                self.tick();
             }
             TXS => {
                 self.sp = self.reg_x;
-                self.tick(1);
+                self.tick();
             }
             TYA => {
                 self.reg_a = self.reg_y;
                 self.update_nz(self.reg_a);
-                self.tick(1);
+                self.tick();
             }
             // Unofficial
             AAC => {
