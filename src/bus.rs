@@ -41,6 +41,21 @@ const RAM_MIRRORS_END: u16 = 0x1FFF;
 // const PPU_REGISTERS: u16 = 0x2000;
 const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DMAState {
+    Idle,
+    Pending,
+    DMCDummy,
+    Alignment,
+    Transfer,
+}
+
+impl Default for DMAState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
 #[allow(unused)]
 pub struct Bus<'call> {
     vram: [u8; 0x800],
@@ -50,6 +65,8 @@ pub struct Bus<'call> {
 
     put_cycle: bool,
     cpu_writing: bool,
+    rdy: bool,
+
     cpu_bus: u8,
     ppu_bus: u8,
     cycles: usize,
@@ -57,6 +74,14 @@ pub struct Bus<'call> {
     joypad1: Joypad,
     joypad2: Joypad,
     cb: Box<dyn FnMut(&PPU, &mut Joypad) -> bool + 'call>,
+
+    oam_dma_state: DMAState,
+    oam_dma_addr: u16,
+    oam_dma_data: u8,
+
+    dmc_dma_state: DMAState,
+    dmc_dma_reload: bool,
+    dmc_dma_addr: u16,
 }
 
 impl<'call> Bus<'call> {
@@ -74,6 +99,8 @@ impl<'call> Bus<'call> {
 
             put_cycle: false,
             cpu_writing: false,
+            rdy: true,
+
             cpu_bus: 0,
             ppu_bus: 0,
             joypad1: Joypad::new(),
@@ -81,15 +108,22 @@ impl<'call> Bus<'call> {
             cycles: 0,
             cycles_acc: 0,
             cb: Box::new(f),
+
+            oam_dma_state: DMAState::default(),
+            oam_dma_addr: 0,
+            oam_dma_data: 0,
+
+            dmc_dma_state: DMAState::default(),
+            dmc_dma_reload: false,
+            dmc_dma_addr: 0,
         }
     }
 
     pub fn tick(&mut self) -> (bool, bool) {
         self.cycles += 1;
-        self.put_cycle = !self.put_cycle;
-        self.apu.tick(&mut self.rom);
-        if let Some(v) = self.apu.dmc.dma_val.take() {
-            self.cpu_bus = v;
+        self.apu.tick();
+        if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
+            self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
         }
         let frame_before = self.ppu.frames;
         self.ppu.tick(&mut self.rom);
@@ -102,10 +136,14 @@ impl<'call> Bus<'call> {
             }
         }
 
+        self.handle_dma();
+
         let mapper_irq = self.rom.irq_sig;
         self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
         self.apu.irq_sig = false;
+
+        self.put_cycle = !self.put_cycle;
         (mapper_irq || apu_irq, false)
     }
 
@@ -119,6 +157,156 @@ impl<'call> Bus<'call> {
 
     pub fn set_writing(&mut self, writing: bool) {
         self.cpu_writing = writing;
+    }
+
+    pub fn rdy(&self) -> bool {
+        self.rdy
+    }
+
+    fn oam_dma_req(&mut self, page: u8) {
+        self.ppu.oam_addr = 0;
+        self.oam_dma_state = DMAState::Pending;
+        self.oam_dma_addr = (page as u16) << 8;
+        self.oam_dma_data = 0;
+    }
+
+    fn dmc_dma_req(&mut self, addr: u16, reload: bool) {
+        self.dmc_dma_state = DMAState::Pending;
+        self.dmc_dma_reload = reload;
+        self.dmc_dma_addr = addr;
+    }
+
+    fn handle_dma(&mut self) {
+        match (self.dmc_dma_state, self.oam_dma_state) {
+            (DMAState::Idle, s) => match s {
+                DMAState::Idle => {}
+                DMAState::Pending => {
+                    if !self.cpu_writing {
+                        self.rdy = false;
+                        if self.put_cycle {
+                            self.oam_dma_state = DMAState::Transfer;
+                        } else {
+                            self.oam_dma_state = DMAState::Alignment;
+                        }
+                    }
+                }
+                DMAState::Alignment => {
+                    self.oam_dma_state = DMAState::Transfer;
+                }
+                DMAState::Transfer => {
+                    if !self.put_cycle {
+                        self.oam_dma_data = self.read_u8(self.oam_dma_addr);
+                    } else {
+                        self.ppu.write_to_oam_data(self.oam_dma_data);
+                        self.oam_dma_addr += 1;
+                        if (self.oam_dma_addr & 0xFF) == 0 {
+                            self.oam_dma_state = DMAState::Idle;
+                            self.rdy = self.dmc_dma_state == DMAState::Idle;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            (s, DMAState::Idle | DMAState::Pending) => match s {
+                DMAState::Idle => {}
+                DMAState::Pending => {
+                    if !self.cpu_writing {
+                        self.rdy = false;
+                        self.dmc_dma_state = DMAState::DMCDummy;
+                    }
+                }
+                DMAState::DMCDummy => {
+                    if self.put_cycle {
+                        self.dmc_dma_state = DMAState::Transfer;
+                    } else {
+                        self.dmc_dma_state = DMAState::Alignment;
+                    }
+                }
+                DMAState::Alignment => {
+                    self.dmc_dma_state = DMAState::Transfer;
+                }
+                DMAState::Transfer => {
+                    let data = self.read_u8(self.dmc_dma_addr);
+                    self.apu.dmc.update_sample(data);
+                    self.dmc_dma_state = DMAState::Idle;
+                    if self.oam_dma_state == DMAState::Pending {
+                        self.oam_dma_state = DMAState::Alignment;
+                    } else {
+                        self.rdy = true;
+                    }
+                }
+            },
+            (s, DMAState::Alignment) => match s {
+                DMAState::Idle => self.oam_dma_state = DMAState::Transfer,
+                DMAState::Pending => {
+                    self.oam_dma_state = DMAState::Transfer;
+                    self.dmc_dma_state = DMAState::DMCDummy;
+                }
+                DMAState::DMCDummy => {
+                    if self.put_cycle {
+                        self.dmc_dma_state = DMAState::Transfer;
+                    } else {
+                        self.dmc_dma_state = DMAState::Alignment;
+                    }
+                }
+                DMAState::Alignment => {
+                    self.dmc_dma_state = DMAState::Transfer;
+                }
+                DMAState::Transfer => {
+                    let data = self.read_u8(self.dmc_dma_addr);
+                    self.apu.dmc.update_sample(data);
+                    self.dmc_dma_state = DMAState::Idle;
+                }
+            },
+            (DMAState::Pending, DMAState::Transfer) => {
+                self.dmc_dma_state = DMAState::DMCDummy;
+                if !self.put_cycle {
+                    self.oam_dma_data = self.read_u8(self.oam_dma_addr);
+                } else {
+                    self.ppu.write_to_oam_data(self.oam_dma_data);
+                    self.oam_dma_addr += 1;
+                    if (self.oam_dma_addr & 0xFF) == 0 {
+                        self.oam_dma_state = DMAState::Idle;
+                    }
+                }
+            }
+            (DMAState::DMCDummy, DMAState::Transfer) => {
+                if !self.put_cycle {
+                    self.dmc_dma_state = DMAState::Alignment;
+                    self.oam_dma_data = self.read_u8(self.oam_dma_addr);
+                } else {
+                    self.dmc_dma_state = DMAState::Transfer;
+                    self.ppu.write_to_oam_data(self.oam_dma_data);
+                    self.oam_dma_addr += 1;
+                    if (self.oam_dma_addr & 0xFF) == 0 {
+                        self.oam_dma_state = DMAState::Idle;
+                    }
+                }
+            }
+            (DMAState::Alignment, DMAState::Transfer) => {
+                self.dmc_dma_state = DMAState::Transfer;
+
+                if !self.put_cycle {
+                    self.oam_dma_data = self.read_u8(self.oam_dma_addr);
+                } else {
+                    self.ppu.write_to_oam_data(self.oam_dma_data);
+                    self.oam_dma_addr += 1;
+                    if (self.oam_dma_addr & 0xFF) == 0 {
+                        self.oam_dma_state = DMAState::Idle;
+                    }
+                }
+            }
+            (DMAState::Transfer, DMAState::Transfer) => {
+                let data = self.read_u8(self.dmc_dma_addr);
+                self.apu.dmc.update_sample(data);
+                self.dmc_dma_state = DMAState::Idle;
+
+                if self.oam_dma_state == DMAState::Transfer {
+                    self.oam_dma_state = DMAState::Alignment;
+                }
+            }
+            (_, DMAState::DMCDummy) => unreachable!(),
+        }
     }
 }
 
@@ -246,21 +434,7 @@ impl<'call> Mem for Bus<'call> {
 
             // https://wiki.nesdev.com/w/index.php/PPU_programmer_reference#OAM_DMA_.28.244014.29_.3E_write
             0x4014 => {
-                let hi: u16 = (data as u16) << 8;
-                if self.cycles % 2 == 1 {
-                    self.tick();
-                    self.tick();
-                } else {
-                    self.tick();
-                }
-
-                // 256 get/put pairs - write happens during the put cycle
-                for i in 0..256u16 {
-                    let byte = self.read_u8(hi + i); // Get cycle (read from memory)
-                    self.tick();
-                    self.ppu.write_to_oam_data(byte); // Put cycle (write to $2004)
-                    self.tick();
-                }
+                self.oam_dma_req(data);
             }
 
             0x4015 => self.apu.write_status(data),

@@ -139,6 +139,12 @@ impl<'a> CPU<'a> {
             }
 
             cb(self);
+
+            while !self.bus.rdy() {
+                self.bus.set_writing(false);
+                self.tick();
+            }
+
             let opcode = self.read_u8(self.pc);
             self.pc += 1;
             let pc_cache = self.pc;

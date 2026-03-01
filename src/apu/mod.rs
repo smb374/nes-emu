@@ -11,7 +11,7 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 
-use crate::{apu::units::filter::Filter, cartridge::Rom};
+use crate::apu::units::filter::Filter;
 
 use self::{
     channel::{dmc::DMCChannel, noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
@@ -108,7 +108,7 @@ impl APU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom) {
+    pub fn tick(&mut self) {
         self.cycles += 1;
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {
@@ -124,7 +124,7 @@ impl APU {
         self.step_frame_sequencer();
 
         self.triag.clock_timer(1);
-        self.dmc.clock_timer(1, rom);
+        self.dmc.clock_timer();
 
         self.cycle_accumulator += 1;
         self.cycle_accumulator &= 1;
@@ -302,9 +302,12 @@ impl APU {
 
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
+            if self.dmc.sample_buffer_empty {
+                self.dmc.dma_reload = false;
+            }
             self.dmc.start();
         } else {
-            self.dmc.stop(); // Sets bytes_remaining to 0
+            self.dmc.stop();
         }
 
         self.irq_sig = self.status.contains(APUStatus::FRAME_INTERRUPT);
