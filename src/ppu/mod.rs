@@ -97,7 +97,7 @@ impl PPU {
             ctrl: ControlRegister::new(),
             mask: MaskRegister::new(),
             status: StatusRegister::new(),
-            vram: [0; 0x800],
+            vram: [0xFF; 0x800],
             oam_addr: 0,
             oam_data: [0xFF; 0x100],
             palette_table: [0; 0x20],

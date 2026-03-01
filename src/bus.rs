@@ -92,7 +92,7 @@ impl<'call> Bus<'call> {
         let ppu = PPU::new();
         let apu = APU::new(device);
         Self {
-            vram: [0u8; 0x800],
+            vram: [0xFF; 0x800],
             rom,
             ppu,
             apu,
@@ -120,30 +120,46 @@ impl<'call> Bus<'call> {
     }
 
     pub fn tick(&mut self) -> (bool, bool) {
-        self.cycles += 1;
-        self.apu.tick();
-        if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
-            self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
-        }
-        let frame_before = self.ppu.frames;
-        self.ppu.tick(&mut self.rom);
-        let frame_after = self.ppu.frames;
+        loop {
+            self.cycles += 1;
+            self.put_cycle = !self.put_cycle;
+            self.apu.tick();
+            if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
+                self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
+            }
+            let frame_before = self.ppu.frames;
+            self.ppu.tick(&mut self.rom);
+            let frame_after = self.ppu.frames;
 
-        if frame_before != frame_after {
-            self.ppu_bus = 0;
-            if (self.cb)(&self.ppu, &mut self.joypad1) {
-                return (false, true);
+            if frame_before != frame_after {
+                self.ppu_bus = 0;
+                if (self.cb)(&self.ppu, &mut self.joypad1) {
+                    return (false, true);
+                }
+            }
+
+            self.handle_dma();
+            match (self.dmc_dma_state, self.oam_dma_state) {
+                (DMAState::Idle, DMAState::Idle) => {
+                    break;
+                }
+                (DMAState::Pending, DMAState::Idle) | (DMAState::Idle, DMAState::Pending)
+                    if self.cpu_writing =>
+                {
+                    break;
+                }
+                (_, DMAState::DMCDummy) => unreachable!(),
+                _ => {
+                    self.cpu_writing = false;
+                }
             }
         }
-
-        self.handle_dma();
 
         let mapper_irq = self.rom.irq_sig;
         self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
         self.apu.irq_sig = false;
 
-        self.put_cycle = !self.put_cycle;
         (mapper_irq || apu_irq, false)
     }
 
