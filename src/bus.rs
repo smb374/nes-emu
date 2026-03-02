@@ -36,11 +36,6 @@ use crate::{
 // | Zero Page     |       |               |
 // |_______________| $0000 |_______________|
 
-const RAM_BASE: u16 = 0x0000;
-const RAM_MIRRORS_END: u16 = 0x1FFF;
-// const PPU_REGISTERS: u16 = 0x2000;
-const PPU_REGISTERS_MIRRORS_END: u16 = 0x3FFF;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DMAState {
     Idle,
@@ -124,6 +119,8 @@ impl<'call> Bus<'call> {
             self.cycles += 1;
             self.put_cycle = !self.put_cycle;
             self.apu.tick();
+            self.handle_dma();
+
             if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
                 self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
             }
@@ -138,20 +135,12 @@ impl<'call> Bus<'call> {
                 }
             }
 
-            self.handle_dma();
             match (self.dmc_dma_state, self.oam_dma_state) {
-                (DMAState::Idle, DMAState::Idle) => {
-                    break;
-                }
-                (DMAState::Pending, DMAState::Idle) | (DMAState::Idle, DMAState::Pending)
-                    if self.cpu_writing =>
-                {
+                (DMAState::Idle | DMAState::Pending, DMAState::Idle | DMAState::Pending) => {
                     break;
                 }
                 (_, DMAState::DMCDummy) => unreachable!(),
-                _ => {
-                    self.cpu_writing = false;
-                }
+                _ => {}
             }
         }
 
@@ -329,7 +318,7 @@ impl<'call> Bus<'call> {
 impl<'call> Mem for Bus<'call> {
     fn read_u8(&mut self, addr: u16) -> u8 {
         match addr {
-            RAM_BASE..=RAM_MIRRORS_END => {
+            0x0000..=0x1FFF => {
                 let mirror_down_addr = addr & 0x7FF;
                 self.cpu_bus = self.vram[mirror_down_addr as usize];
                 self.cpu_bus
@@ -354,7 +343,7 @@ impl<'call> Mem for Bus<'call> {
                 self.cpu_bus = self.ppu_bus;
                 self.cpu_bus
             }
-            0x2008..=PPU_REGISTERS_MIRRORS_END => {
+            0x2008..=0x3FFF => {
                 let mirror_down_addr = addr & 0x2007;
                 self.read_u8(mirror_down_addr)
             }
@@ -382,7 +371,7 @@ impl<'call> Mem for Bus<'call> {
     fn write_u8(&mut self, addr: u16, data: u8) {
         self.cpu_bus = data;
         match addr {
-            RAM_BASE..=RAM_MIRRORS_END => {
+            0x0000..=0x1FFF => {
                 let mirror_down_addr = addr & 0x7FF;
                 self.vram[mirror_down_addr as usize] = data;
             }
@@ -418,7 +407,7 @@ impl<'call> Mem for Bus<'call> {
                 }
             }
 
-            0x2008..=PPU_REGISTERS_MIRRORS_END => {
+            0x2008..=0x3FFF => {
                 let mirror_down_addr = addr & 0x2007;
                 self.write_u8(mirror_down_addr, data);
             }
