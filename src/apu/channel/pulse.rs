@@ -55,14 +55,12 @@ impl PulseChannel {
             muted: false,
         }
     }
-    pub fn clock_timer(&mut self, cycles: usize) {
-        for _ in 0..cycles {
-            if self.timer_counter == 0 {
-                self.timer_counter = self.timer_period;
-                self.duty_idx = (self.duty_idx + 1) % 8;
-            } else {
-                self.timer_counter -= 1;
-            }
+    pub fn clock_timer(&mut self) {
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer_period;
+            self.duty_idx = (self.duty_idx + 1) % 8;
+        } else {
+            self.timer_counter -= 1;
         }
     }
     pub fn clock_envelope(&mut self) {

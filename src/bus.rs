@@ -58,7 +58,6 @@ pub struct Bus<'call> {
     pub ppu: PPU,
     apu: APU,
 
-    put_cycle: bool,
     cpu_writing: bool,
     rdy: bool,
 
@@ -92,7 +91,6 @@ impl<'call> Bus<'call> {
             ppu,
             apu,
 
-            put_cycle: false,
             cpu_writing: false,
             rdy: true,
 
@@ -117,7 +115,6 @@ impl<'call> Bus<'call> {
     pub fn tick(&mut self) -> (bool, bool) {
         loop {
             self.cycles += 1;
-            self.put_cycle = !self.put_cycle;
             self.apu.tick();
             self.handle_dma();
 
@@ -137,6 +134,9 @@ impl<'call> Bus<'call> {
 
             match (self.dmc_dma_state, self.oam_dma_state) {
                 (DMAState::Idle | DMAState::Pending, DMAState::Idle | DMAState::Pending) => {
+                    // Getting here means that:
+                    // 1. Both idle
+                    // 2. CPU is writing
                     break;
                 }
                 (_, DMAState::DMCDummy) => unreachable!(),
@@ -188,7 +188,7 @@ impl<'call> Bus<'call> {
                 DMAState::Pending => {
                     if !self.cpu_writing {
                         self.rdy = false;
-                        if self.put_cycle {
+                        if self.apu.put_cycle {
                             self.oam_dma_state = DMAState::Transfer;
                         } else {
                             self.oam_dma_state = DMAState::Alignment;
@@ -199,7 +199,7 @@ impl<'call> Bus<'call> {
                     self.oam_dma_state = DMAState::Transfer;
                 }
                 DMAState::Transfer => {
-                    if !self.put_cycle {
+                    if !self.apu.put_cycle {
                         self.oam_dma_data = self.read_u8(self.oam_dma_addr);
                     } else {
                         self.ppu.write_to_oam_data(self.oam_dma_data);
@@ -221,7 +221,7 @@ impl<'call> Bus<'call> {
                     }
                 }
                 DMAState::DMCDummy => {
-                    if self.put_cycle {
+                    if self.apu.put_cycle {
                         self.dmc_dma_state = DMAState::Transfer;
                     } else {
                         self.dmc_dma_state = DMAState::Alignment;
@@ -248,7 +248,7 @@ impl<'call> Bus<'call> {
                     self.dmc_dma_state = DMAState::DMCDummy;
                 }
                 DMAState::DMCDummy => {
-                    if self.put_cycle {
+                    if self.apu.put_cycle {
                         self.dmc_dma_state = DMAState::Transfer;
                     } else {
                         self.dmc_dma_state = DMAState::Alignment;
@@ -265,7 +265,7 @@ impl<'call> Bus<'call> {
             },
             (DMAState::Pending, DMAState::Transfer) => {
                 self.dmc_dma_state = DMAState::DMCDummy;
-                if !self.put_cycle {
+                if !self.apu.put_cycle {
                     self.oam_dma_data = self.read_u8(self.oam_dma_addr);
                 } else {
                     self.ppu.write_to_oam_data(self.oam_dma_data);
@@ -276,7 +276,7 @@ impl<'call> Bus<'call> {
                 }
             }
             (DMAState::DMCDummy, DMAState::Transfer) => {
-                if !self.put_cycle {
+                if !self.apu.put_cycle {
                     self.dmc_dma_state = DMAState::Alignment;
                     self.oam_dma_data = self.read_u8(self.oam_dma_addr);
                 } else {
@@ -291,7 +291,7 @@ impl<'call> Bus<'call> {
             (DMAState::Alignment, DMAState::Transfer) => {
                 self.dmc_dma_state = DMAState::Transfer;
 
-                if !self.put_cycle {
+                if !self.apu.put_cycle {
                     self.oam_dma_data = self.read_u8(self.oam_dma_addr);
                 } else {
                     self.ppu.write_to_oam_data(self.oam_dma_data);
