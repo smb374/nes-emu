@@ -974,18 +974,19 @@ impl PPU {
         self.update_a12(rom, self.internal.get_v());
     }
 
-    pub fn read_data(&mut self, rom: &mut Rom) -> u8 {
+    pub fn read_data(&mut self, rom: &mut Rom, bus_val: u8) -> u8 {
         let addr = self.internal.get_v();
-        self.internal.increment_v(self.ctrl.vram_addr_increment());
+        self.internal
+            .increment_v(self.ctrl.vram_addr_increment() as u16);
         match addr {
             0..=0x3EFF => {
                 let result = self.internal_data_buf;
-                self.internal_data_buf = self.read_vram(rom, addr);
+                self.internal_data_buf = self.read_vram(rom, addr, bus_val);
                 result
             }
             0x3F00..=0x3FFF => {
-                self.internal_data_buf = self.read_vram(rom, addr - 0x1000);
-                self.read_vram(rom, addr)
+                self.internal_data_buf = self.read_vram(rom, addr - 0x1000, bus_val);
+                self.read_vram(rom, addr, bus_val)
             }
             _ => 0,
         }
@@ -994,7 +995,8 @@ impl PPU {
     pub fn write_data(&mut self, rom: &mut Rom, val: u8) {
         let addr = self.internal.get_v();
         self.write_vram(rom, addr, val);
-        self.internal.increment_v(self.ctrl.vram_addr_increment());
+        self.internal
+            .increment_v(self.ctrl.vram_addr_increment() as u16);
     }
 
     pub fn write_oam_dma(&mut self, data: &[u8; 256]) {
@@ -1004,7 +1006,7 @@ impl PPU {
         }
     }
 
-    fn read_vram(&mut self, rom: &mut Rom, addr: u16) -> u8 {
+    fn read_vram(&mut self, rom: &mut Rom, addr: u16, bus_val: u8) -> u8 {
         let addr = addr & 0x3FFF;
         self.update_a12(rom, addr);
 
@@ -1020,9 +1022,11 @@ impl PPU {
             }
             0x3F10 | 0x3F14 | 0x3F18 | 0x3F1C => {
                 let add_mirror = addr - 0x10;
-                self.palette_table[(add_mirror - 0x3F00) as usize]
+                (bus_val & 0xC0) | (self.palette_table[(add_mirror - 0x3F00) as usize] & 0x3F)
             }
-            0x3F00..=0x3FFF => self.palette_table[(addr - 0x3F00) as usize & 0x1F],
+            0x3F00..=0x3FFF => {
+                (bus_val & 0xC0) | (self.palette_table[(addr - 0x3F00) as usize & 0x1F] & 0x3F)
+            }
             _ => 0,
         }
     }

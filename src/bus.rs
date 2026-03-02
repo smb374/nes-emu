@@ -350,7 +350,7 @@ impl<'call> Mem for Bus<'call> {
                 self.cpu_bus
             }
             0x2007 => {
-                self.ppu_bus = self.ppu.read_data(&mut self.rom);
+                self.ppu_bus = self.ppu.read_data(&mut self.rom, self.ppu_bus);
                 self.cpu_bus = self.ppu_bus;
                 self.cpu_bus
             }
