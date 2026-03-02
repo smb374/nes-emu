@@ -825,7 +825,7 @@ impl PPU {
             self.read_palette(base + final_palette * 4 + final_pixel)
         };
 
-        let rgb = palette::SYSTEM_PALETTE[final_color_idx as usize];
+        let rgb = palette::SYSTEM_PALETTE[final_color_idx as usize % 64];
         let offset = (self.scanline as usize * 256 + x) * 3;
         if offset + 2 < self.frame_buffer.len() {
             self.frame_buffer[offset] = rgb.0;
