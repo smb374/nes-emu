@@ -77,9 +77,14 @@ pub struct CPU<'a> {
 
 impl<'a> Mem for CPU<'a> {
     fn read_u8(&mut self, addr: u16) -> u8 {
-        self.bus.set_writing(false);
-        self.tick();
-        self.bus.read_u8(addr)
+        loop {
+            self.bus.set_writing(false);
+            self.tick();
+            let data = self.bus.read_u8(addr);
+            if self.bus.rdy() {
+                break data;
+            }
+        }
     }
     fn write_u8(&mut self, addr: u16, val: u8) {
         self.bus.set_writing(true);

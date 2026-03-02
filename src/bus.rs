@@ -113,34 +113,21 @@ impl<'call> Bus<'call> {
     }
 
     pub fn tick(&mut self) -> (bool, bool) {
-        loop {
-            self.cycles += 1;
-            self.apu.tick();
-            self.handle_dma();
+        self.cycles += 1;
+        self.apu.tick();
+        self.handle_dma();
 
-            if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
-                self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
-            }
-            let frame_before = self.ppu.frames;
-            self.ppu.tick(&mut self.rom);
-            let frame_after = self.ppu.frames;
+        if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
+            self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
+        }
+        let frame_before = self.ppu.frames;
+        self.ppu.tick(&mut self.rom);
+        let frame_after = self.ppu.frames;
 
-            if frame_before != frame_after {
-                self.ppu_bus = 0;
-                if (self.cb)(&self.ppu, &mut self.joypad1) {
-                    return (false, true);
-                }
-            }
-
-            match (self.dmc_dma_state, self.oam_dma_state) {
-                (DMAState::Idle | DMAState::Pending, DMAState::Idle | DMAState::Pending) => {
-                    // Getting here means that:
-                    // 1. Both idle
-                    // 2. CPU is writing
-                    break;
-                }
-                (_, DMAState::DMCDummy) => unreachable!(),
-                _ => {}
+        if frame_before != frame_after {
+            self.ppu_bus = 0;
+            if (self.cb)(&self.ppu, &mut self.joypad1) {
+                return (false, true);
             }
         }
 
