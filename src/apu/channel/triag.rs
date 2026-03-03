@@ -27,7 +27,7 @@ impl TriangleChannel {
             counter: 0,
             timer_period: 0,
             timer_counter: 0,
-            length_enabled: true,
+            length_enabled: false,
             length_counter: 0,
             linear_counter: 0,
             linear_counter_reload_flag: false,

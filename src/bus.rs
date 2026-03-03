@@ -339,7 +339,7 @@ impl<'call> Mem for Bus<'call> {
 
             0x4000..=0x4014 => self.cpu_bus,
 
-            0x4015 => (self.cpu_bus & 0x20) | (self.apu.read_status() & 0xd0),
+            0x4015 => (self.cpu_bus & 0x20) | (self.apu.read_status() & 0xdf),
 
             0x4016 => {
                 self.cpu_bus = (self.cpu_bus & 0xe0) | (self.joypad1.read() & 0x1f);

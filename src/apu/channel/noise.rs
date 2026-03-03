@@ -34,7 +34,7 @@ impl NoiseChannel {
             envelope: Envelope::default(),
             timer_period: 0,
             timer_counter: 0,
-            length_enabled: true,
+            length_enabled: false,
             length_counter: 0,
             shift_register: 1, // Initial value is 1
             mode: false,

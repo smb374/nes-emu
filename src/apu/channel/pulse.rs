@@ -49,7 +49,7 @@ impl PulseChannel {
             sweep: Sweep::new(is_pulse2),
             timer_period: 0,
             timer_counter: 0,
-            length_enabled: true,
+            length_enabled: false,
             length_counter: 0,
             duty_idx: 0,
             muted: false,

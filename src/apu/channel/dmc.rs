@@ -61,7 +61,7 @@ impl DMCChannel {
             bits_remaining: 0,
             silence_flag: true,
             current_address: 0xC000,
-            bytes_remaining: 1,
+            bytes_remaining: 0,
             irq_flag: false,
             dma_sample: false,
             dma_reload: false,

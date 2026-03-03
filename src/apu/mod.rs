@@ -337,6 +337,11 @@ impl APU {
             self.irq_sig = self.dmc.irq_flag;
         }
 
+        if (value & 0x80) != 0 {
+            self.clock_envelopes();
+            self.clock_length_and_sweep();
+        }
+
         self.fcycles = 0;
     }
 
