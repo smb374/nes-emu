@@ -38,7 +38,8 @@ impl Default for FrameCounter {
 
 impl APUStatus {
     pub fn update(&mut self, bits: u8) {
-        *self = Self::from_bits_retain(bits & 0x1F);
+        let preserve = self.bits() & 0xE0;
+        *self = Self::from_bits_retain((bits & 0x1F) | preserve);
     }
 }
 

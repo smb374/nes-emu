@@ -38,7 +38,6 @@ pub struct APU {
 
     cycles: usize,
     fcycles: usize,
-    irq_set: bool,
     sample_accumulator: f64,
     sample_tx: SyncSender<f32>,
     hpf90: Filter<44100>,
@@ -96,7 +95,6 @@ impl APU {
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),
 
-            irq_set: false,
             cycles: 0,
             fcycles: 0,
             sample_accumulator: 0.0,
@@ -162,31 +160,22 @@ impl APU {
                     self.clock_envelopes();
                 }
                 (14914, false) => {
-                    if !self.irq_set {
-                        self.status
-                            .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                        self.irq_sig = self.frame_counter.emit_irq();
-                        self.irq_set = self.irq_sig;
-                    }
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.irq_sig = self.frame_counter.emit_irq();
                 }
                 (14914, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
-                    if !self.irq_set {
-                        self.status
-                            .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                        self.irq_sig = self.frame_counter.emit_irq();
-                        self.irq_set = self.irq_sig;
-                    }
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.irq_sig = self.frame_counter.emit_irq();
                 }
                 (14915, false) => {
                     self.fcycles = 0;
-                    if !self.irq_set {
-                        self.status
-                            .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                        self.irq_sig = self.frame_counter.emit_irq();
-                    }
-                    self.irq_set = false;
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.irq_sig = self.frame_counter.emit_irq();
                 }
                 _ => {}
             }
@@ -331,7 +320,6 @@ impl APU {
 
     fn apply_frame_counter(&mut self, value: u8) {
         self.frame_counter.update(value);
-
         if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
             self.irq_sig = self.dmc.irq_flag;
