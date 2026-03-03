@@ -93,11 +93,13 @@ pub struct PPU {
 
 impl PPU {
     pub fn new() -> Self {
+        let mut vram = [0xFF; 0x800];
+        rand::fill(&mut vram);
         Self {
             ctrl: ControlRegister::new(),
             mask: MaskRegister::new(),
             status: StatusRegister::new(),
-            vram: [0xFF; 0x800],
+            vram,
             oam_addr: 0,
             oam_data: [0xFF; 0x100],
             palette_table: [0; 0x20],

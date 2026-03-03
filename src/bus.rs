@@ -85,8 +85,10 @@ impl<'call> Bus<'call> {
     {
         let ppu = PPU::new();
         let apu = APU::new(device);
+        let mut vram = [0xFF; 0x800];
+        rand::fill(&mut vram);
         Self {
-            vram: [0xFF; 0x800],
+            vram,
             rom,
             ppu,
             apu,
