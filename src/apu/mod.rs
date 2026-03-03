@@ -35,6 +35,7 @@ pub struct APU {
     pub triag: TriangleChannel,
     pub noise: NoiseChannel,
     pub dmc: DMCChannel,
+    clear_irq_flag: bool,
 
     cycles: usize,
     fcycles: usize,
@@ -94,6 +95,7 @@ impl APU {
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),
+            clear_irq_flag: false,
 
             cycles: 0,
             fcycles: 0,
@@ -109,6 +111,14 @@ impl APU {
 
     pub fn tick(&mut self) {
         self.cycles += 1;
+
+        self.step_frame_sequencer();
+        // Because of how CPU read is tick -> read, we'll have to do this on a PUT instead of GET
+        // cycle.
+        if self.clear_irq_flag && self.put_cycle {
+            self.clear_irq_flag = false;
+            self.status.remove(APUStatus::FRAME_INTERRUPT);
+        }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {
                 delay -= 1;
@@ -119,8 +129,6 @@ impl APU {
                 self.pending_frame_counter = Some((val, delay));
             }
         }
-
-        self.step_frame_sequencer();
 
         self.triag.clock_timer();
         self.dmc.clock_timer();
@@ -137,9 +145,7 @@ impl APU {
             self.status.insert(APUStatus::DMC_INTERRUPT);
         }
 
-        if self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT) {
-            self.irq_sig = true;
-        }
+        self.irq_sig = self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT);
     }
 
     fn step_frame_sequencer(&mut self) {
@@ -266,8 +272,7 @@ impl APU {
             self.status.insert(APUStatus::DMC_INTERRUPT);
             res |= 0x80;
         }
-        self.status.remove(APUStatus::FRAME_INTERRUPT);
-        self.irq_sig = self.dmc.irq_flag;
+        self.clear_irq_flag = true;
         res
     }
 
