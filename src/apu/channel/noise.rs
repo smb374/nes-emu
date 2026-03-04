@@ -34,21 +34,19 @@ impl NoiseChannel {
             envelope: Envelope::default(),
             timer_period: 0,
             timer_counter: 0,
-            length_enabled: true,
+            length_enabled: false,
             length_counter: 0,
             shift_register: 1, // Initial value is 1
             mode: false,
         }
     }
 
-    pub fn clock_timer(&mut self, cycles: usize) {
-        for _ in 0..cycles {
-            if self.timer_counter == 0 {
-                self.timer_counter = self.timer_period;
-                self.clock_shift_register();
-            } else {
-                self.timer_counter -= 1;
-            }
+    pub fn clock_timer(&mut self) {
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer_period;
+            self.clock_shift_register();
+        } else {
+            self.timer_counter -= 1;
         }
     }
 

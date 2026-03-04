@@ -79,6 +79,13 @@ impl<'a> Mem for CPU<'a> {
     fn read_u8(&mut self, addr: u16) -> u8 {
         self.bus.set_writing(false);
         self.tick();
+        while !self.bus.rdy() {
+            if !self.bus.is_dma_xfer() {
+                self.bus.read_u8(addr);
+            }
+            self.bus.set_writing(false);
+            self.tick();
+        }
         self.bus.read_u8(addr)
     }
     fn write_u8(&mut self, addr: u16, val: u8) {
@@ -139,6 +146,7 @@ impl<'a> CPU<'a> {
             }
 
             cb(self);
+
             let opcode = self.read_u8(self.pc);
             self.pc += 1;
             let pc_cache = self.pc;

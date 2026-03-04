@@ -261,8 +261,8 @@ impl InternalRegisters {
     }
 
     // Increment VRAM address
-    pub fn increment_v(&mut self, inc: u8) {
-        self.v = self.v.wrapping_add(inc as u16) & 0x3FFF;
+    pub fn increment_v(&mut self, inc: u16) {
+        self.v = self.v.wrapping_add(inc) & 0x3FFF;
     }
 
     // Update nametable bits from PPUCTRL

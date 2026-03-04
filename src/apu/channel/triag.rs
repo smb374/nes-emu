@@ -27,7 +27,7 @@ impl TriangleChannel {
             counter: 0,
             timer_period: 0,
             timer_counter: 0,
-            length_enabled: true,
+            length_enabled: false,
             length_counter: 0,
             linear_counter: 0,
             linear_counter_reload_flag: false,
@@ -35,20 +35,18 @@ impl TriangleChannel {
         }
     }
 
-    pub fn clock_timer(&mut self, cycles: usize) {
+    pub fn clock_timer(&mut self) {
         // Triangle channel only advances if both counters are non-zero
         if self.length_counter == 0 || self.linear_counter == 0 {
             return;
         }
 
-        for _ in 0..cycles {
-            if self.timer_counter == 0 {
-                self.timer_counter = self.timer_period;
-                // Advance the 32-step sequencer
-                self.sequence_idx = (self.sequence_idx + 1) % 32;
-            } else {
-                self.timer_counter -= 1;
-            }
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer_period;
+            // Advance the 32-step sequencer
+            self.sequence_idx = (self.sequence_idx + 1) % 32;
+        } else {
+            self.timer_counter -= 1;
         }
     }
 

@@ -1,5 +1,3 @@
-use crate::cartridge::Rom;
-
 #[rustfmt::skip]
 const RATE_TABLE: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214,
@@ -28,7 +26,7 @@ pub struct DMCChannel {
 
     // Sample buffer
     sample_buffer: u8,
-    sample_buffer_empty: bool,
+    pub sample_buffer_empty: bool,
 
     // Shift register
     shift_register: u8,
@@ -36,13 +34,14 @@ pub struct DMCChannel {
     silence_flag: bool,
 
     // Memory reader
-    current_address: u16,
+    pub current_address: u16,
     bytes_remaining: u16,
 
     // IRQ flag
     pub irq_flag: bool,
 
-    pub dma_val: Option<u8>,
+    pub dma_sample: bool,
+    pub dma_reload: bool,
 }
 
 impl DMCChannel {
@@ -62,9 +61,10 @@ impl DMCChannel {
             bits_remaining: 0,
             silence_flag: true,
             current_address: 0xC000,
-            bytes_remaining: 1,
+            bytes_remaining: 0,
             irq_flag: false,
-            dma_val: None,
+            dma_sample: false,
+            dma_reload: false,
         }
     }
 
@@ -115,40 +115,44 @@ impl DMCChannel {
     }
 
     /// Clock the timer
-    pub fn clock_timer(&mut self, cycles: usize, rom: &mut Rom) {
-        for _ in 0..cycles {
-            // Timer
-            if self.timer_counter == 0 {
-                self.timer_counter = self.timer_period;
-                self.clock_output_unit();
-            } else {
-                self.timer_counter -= 1;
-            }
+    pub fn clock_timer(&mut self) {
+        if self.dma_sample {
+            return;
+        }
+        // Timer
+        if self.timer_counter == 0 {
+            self.timer_counter = self.timer_period;
+            self.clock_output_unit();
+        } else {
+            self.timer_counter -= 1;
+        }
 
-            // Memory reader
-            if self.sample_buffer_empty && self.bytes_remaining > 0 {
-                // Read from CPU memory
-                self.sample_buffer = rom.read_prg(self.current_address);
-                self.dma_val = Some(self.sample_buffer);
+        // Memory reader
+        if self.sample_buffer_empty && self.bytes_remaining > 0 {
+            self.dma_sample = true;
+            self.dma_reload = true;
+        }
+    }
 
-                self.sample_buffer_empty = false;
+    pub fn update_sample(&mut self, data: u8) {
+        self.dma_sample = false;
+        self.sample_buffer = data;
+        self.sample_buffer_empty = false;
 
-                // Advance address with wrapping
-                if self.current_address == 0xFFFF {
-                    self.current_address = 0x8000;
-                } else {
-                    self.current_address += 1;
-                }
+        // Advance address with wrapping
+        if self.current_address == 0xFFFF {
+            self.current_address = 0x8000;
+        } else {
+            self.current_address += 1;
+        }
 
-                self.bytes_remaining -= 1;
+        self.bytes_remaining -= 1;
 
-                if self.bytes_remaining == 0 {
-                    if self.loop_flag {
-                        self.restart_sample();
-                    } else if self.irq_enabled {
-                        self.irq_flag = true;
-                    }
-                }
+        if self.bytes_remaining == 0 {
+            if self.loop_flag {
+                self.restart_sample();
+            } else if self.irq_enabled {
+                self.irq_flag = true;
             }
         }
     }

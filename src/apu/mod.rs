@@ -3,7 +3,10 @@ mod mix_table;
 pub mod registers;
 mod units;
 
-use std::sync::mpsc::{self, SyncSender, TryRecvError};
+use std::{
+    sync::mpsc::{self, SyncSender, TryRecvError},
+    time::SystemTime,
+};
 
 pub use channel::TimedChannel;
 use cpal::{
@@ -11,7 +14,7 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 
-use crate::{apu::units::filter::Filter, cartridge::Rom};
+use crate::apu::units::filter::Filter;
 
 use self::{
     channel::{dmc::DMCChannel, noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
@@ -21,32 +24,27 @@ use self::{
 
 const CPU_FREQ: u32 = 1_789_773;
 const SAMPLE_RATE: u32 = 44_100;
-const FC_STEPS0: [usize; 4] = [7456, 7458, 7458, 7458];
-const FC_STEPS1: [usize; 5] = [7458, 7456, 7458, 7458, 7452];
-const FC_RELOAD0: usize = 7459;
 
 pub struct APU {
     pub status: APUStatus,
     pub frame_counter: FrameCounter,
     pub irq_sig: bool,
-
+    pub put_cycle: bool,
     pub pulse1: PulseChannel,
     pub pulse2: PulseChannel,
     pub triag: TriangleChannel,
     pub noise: NoiseChannel,
     pub dmc: DMCChannel,
+    dmc_dma_schedule: Option<usize>,
+    clear_irq_flag: bool,
 
     cycles: usize,
-    frame_step: usize,
-    frame_delay: usize,
-    cycle_accumulator: usize,
-
+    fcycles: usize,
     sample_accumulator: f64,
     sample_tx: SyncSender<f32>,
     hpf90: Filter<44100>,
     hpf442: Filter<44100>,
     lpf14k: Filter<44100>,
-
     _stream: Stream,
     pending_frame_counter: Option<(u8, u8)>,
 }
@@ -82,22 +80,27 @@ impl APU {
             )
             .expect("Failed to create output stream");
         stream.play().expect("Failed to start stream");
+        let time_base = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .unwrap_or_default()
+            .as_millis();
 
         Self {
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
             irq_sig: false,
-
+            put_cycle: (time_base & 1) == 1,
             pulse1: PulseChannel::new(false),
             pulse2: PulseChannel::new(true),
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),
+            dmc_dma_schedule: None,
+            clear_irq_flag: false,
 
             cycles: 0,
-            cycle_accumulator: 0,
-            frame_step: 0,
-            frame_delay: FC_RELOAD0,
+            fcycles: 0,
             sample_accumulator: 0.0,
             sample_tx: tx,
             hpf90: Filter::new(90.0, true),
@@ -108,8 +111,39 @@ impl APU {
         }
     }
 
-    pub fn tick(&mut self, rom: &mut Rom) {
+    pub fn tick(&mut self) {
         self.cycles += 1;
+
+        if self.clear_irq_flag && !self.put_cycle {
+            self.clear_irq_flag = false;
+            self.status.remove(APUStatus::FRAME_INTERRUPT);
+        }
+        self.step_frame_sequencer();
+        self.triag.clock_timer();
+        self.dmc.clock_timer();
+
+        if self.put_cycle {
+            self.pulse1.clock_timer();
+            self.pulse2.clock_timer();
+            self.noise.clock_timer();
+        }
+
+        self.generate_samples();
+        if self.dmc.irq_flag {
+            self.status.insert(APUStatus::DMC_INTERRUPT);
+        }
+
+        self.irq_sig = self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT);
+
+        self.put_cycle = !self.put_cycle;
+        if !self.put_cycle {
+            self.fcycles += 1;
+            if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
+                self.dmc.dma_sample = true;
+                self.dmc.dma_reload = false;
+                self.dmc_dma_schedule = None;
+            }
+        }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {
                 delay -= 1;
@@ -120,85 +154,62 @@ impl APU {
                 self.pending_frame_counter = Some((val, delay));
             }
         }
-
-        self.step_frame_sequencer();
-
-        self.triag.clock_timer(1);
-        self.dmc.clock_timer(1, rom);
-
-        self.cycle_accumulator += 1;
-        self.cycle_accumulator &= 1;
-        if self.cycle_accumulator == 0 {
-            self.pulse1.clock_timer(1);
-            self.pulse2.clock_timer(1);
-            self.noise.clock_timer(1);
-        }
-
-        self.generate_samples(1);
-
-        if self.dmc.irq_flag {
-            self.status.insert(APUStatus::DMC_INTERRUPT);
-        }
-
-        if self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT) {
-            self.irq_sig = true;
-        }
     }
 
     fn step_frame_sequencer(&mut self) {
-        if self.frame_delay > 0 {
-            self.frame_delay -= 1;
-        }
-        if self.frame_delay == 0 {
-            self.clock_frame_sequencer(self.frame_step);
-            if self.frame_counter.is_five_mode() {
-                self.frame_delay = FC_STEPS1[self.frame_step];
-                self.frame_step = (self.frame_step + 1) % 5;
-            } else {
-                self.frame_delay = FC_STEPS0[self.frame_step];
-                self.frame_step = (self.frame_step + 1) % 4;
-            }
-        }
-    }
-
-    fn clock_frame_sequencer(&mut self, quarter_frame: usize) {
-        if self.frame_counter.is_five_mode() {
-            match quarter_frame {
-                0 => {
+        if !self.frame_counter.is_five_mode() {
+            match (self.fcycles, self.put_cycle) {
+                (3728, true) => {
+                    self.clock_envelopes();
+                }
+                (7456, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
                 }
-                1 => {
+                (11185, true) => {
                     self.clock_envelopes();
                 }
-                2 => {
+                (14914, false) => {
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.irq_sig = self.frame_counter.emit_irq();
+                }
+                (14914, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.irq_sig = self.frame_counter.emit_irq();
                 }
-                3 => {
-                    self.clock_envelopes();
+                (14915, false) => {
+                    self.fcycles = 0;
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.irq_sig = self.frame_counter.emit_irq();
                 }
                 _ => {}
             }
         } else {
-            match quarter_frame {
-                0 => {
+            match (self.fcycles, self.put_cycle) {
+                (3728, true) => {
                     self.clock_envelopes();
                 }
-                1 => {
+                (7456, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
                 }
-                2 => {
+                (11185, true) => {
                     self.clock_envelopes();
                 }
-                3 => {
+                (14914, true) => {
+                    // Do nothing
+                }
+                (18640, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
-
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
+                }
+                (18641, false) => {
+                    self.fcycles = 0;
                 }
                 _ => {}
             }
@@ -229,8 +240,8 @@ impl APU {
         }
     }
 
-    fn generate_samples(&mut self, cycles: usize) {
-        self.sample_accumulator += cycles as f64 * SAMPLE_RATE as f64 / CPU_FREQ as f64;
+    fn generate_samples(&mut self) {
+        self.sample_accumulator += 1.0 * SAMPLE_RATE as f64 / CPU_FREQ as f64;
         let samples_to_generate = self.sample_accumulator as usize;
 
         for _ in 0..samples_to_generate {
@@ -265,8 +276,7 @@ impl APU {
             self.status.insert(APUStatus::DMC_INTERRUPT);
             res |= 0x80;
         }
-        self.status.remove(APUStatus::FRAME_INTERRUPT);
-        self.irq_sig = self.dmc.irq_flag;
+        self.clear_irq_flag = true;
         res
     }
 
@@ -302,32 +312,34 @@ impl APU {
 
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
+            if self.dmc.sample_buffer_empty {
+                self.dmc_dma_schedule = Some(self.fcycles + 2);
+            }
             self.dmc.start();
         } else {
-            self.dmc.stop(); // Sets bytes_remaining to 0
+            self.dmc.stop();
         }
 
         self.irq_sig = self.status.contains(APUStatus::FRAME_INTERRUPT);
     }
 
     pub fn write_frame_counter(&mut self, value: u8) {
-        self.pending_frame_counter = Some((value, if self.cycles % 2 == 0 { 3 } else { 2 }));
+        self.pending_frame_counter = Some((value, if self.put_cycle { 3 } else { 4 }));
     }
 
     fn apply_frame_counter(&mut self, value: u8) {
         self.frame_counter.update(value);
-
         if (value & 0x40) != 0 {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
             self.irq_sig = self.dmc.irq_flag;
         }
 
-        self.frame_step = 0;
-        if self.frame_counter.is_five_mode() {
-            self.frame_delay = 1;
-        } else {
-            self.frame_delay = FC_RELOAD0;
+        if (value & 0x80) != 0 {
+            self.clock_envelopes();
+            self.clock_length_and_sweep();
         }
+
+        self.fcycles = 0;
     }
 
     fn mix_channels(&mut self) -> f32 {
