@@ -113,11 +113,29 @@ impl APU {
         self.cycles += 1;
 
         self.step_frame_sequencer();
-        // Because of how CPU read is tick -> read, we'll have to do this on a PUT instead of GET
-        // cycle.
-        if self.clear_irq_flag && self.put_cycle {
+        if self.clear_irq_flag && !self.put_cycle {
             self.clear_irq_flag = false;
             self.status.remove(APUStatus::FRAME_INTERRUPT);
+        }
+        self.triag.clock_timer();
+        self.dmc.clock_timer();
+
+        if self.put_cycle {
+            self.pulse1.clock_timer();
+            self.pulse2.clock_timer();
+            self.noise.clock_timer();
+        }
+
+        self.generate_samples();
+        if self.dmc.irq_flag {
+            self.status.insert(APUStatus::DMC_INTERRUPT);
+        }
+
+        self.irq_sig = self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT);
+
+        self.put_cycle = !self.put_cycle;
+        if !self.put_cycle {
+            self.fcycles += 1;
         }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {
@@ -129,30 +147,9 @@ impl APU {
                 self.pending_frame_counter = Some((val, delay));
             }
         }
-
-        self.triag.clock_timer();
-        self.dmc.clock_timer();
-
-        if self.put_cycle {
-            self.pulse1.clock_timer();
-            self.pulse2.clock_timer();
-            self.noise.clock_timer();
-        }
-
-        self.generate_samples();
-
-        if self.dmc.irq_flag {
-            self.status.insert(APUStatus::DMC_INTERRUPT);
-        }
-
-        self.irq_sig = self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT);
     }
 
     fn step_frame_sequencer(&mut self) {
-        self.put_cycle = !self.put_cycle;
-        if !self.put_cycle {
-            self.fcycles += 1;
-        }
         if !self.frame_counter.is_five_mode() {
             match (self.fcycles, self.put_cycle) {
                 (3728, true) => {
