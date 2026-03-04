@@ -163,13 +163,15 @@ impl APU {
                     self.clock_envelopes();
                 }
                 (14914, false) => {
-                    self.status.insert(APUStatus::FRAME_INTERRUPT);
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
                     self.irq_sig = self.frame_counter.emit_irq();
                 }
                 (14914, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
-                    self.status.insert(APUStatus::FRAME_INTERRUPT);
+                    self.status
+                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
                     self.irq_sig = self.frame_counter.emit_irq();
                 }
                 (14915, false) => {
