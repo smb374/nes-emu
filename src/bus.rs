@@ -76,6 +76,7 @@ pub struct Bus<'call> {
     dmc_dma_state: DMAState,
     dmc_dma_reload: bool,
     dmc_dma_addr: u16,
+    dmc_dma_retry: bool,
 }
 
 impl<'call> Bus<'call> {
@@ -111,17 +112,18 @@ impl<'call> Bus<'call> {
             dmc_dma_state: DMAState::default(),
             dmc_dma_reload: false,
             dmc_dma_addr: 0,
+            dmc_dma_retry: false,
         }
     }
 
     pub fn tick(&mut self) -> (bool, bool) {
         self.cycles += 1;
         self.apu.tick();
-        self.handle_dma();
 
         if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
             self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
         }
+        self.handle_dma();
         let frame_before = self.ppu.frames;
         self.ppu.tick(&mut self.rom);
         let frame_after = self.ppu.frames;
@@ -157,6 +159,10 @@ impl<'call> Bus<'call> {
         self.rdy
     }
 
+    pub fn is_dma_xfer(&self) -> bool {
+        self.oam_dma_state == DMAState::Transfer || self.dmc_dma_state == DMAState::Transfer
+    }
+
     fn oam_dma_req(&mut self, page: u8) {
         self.ppu.oam_addr = 0;
         self.oam_dma_state = DMAState::Pending;
@@ -168,6 +174,7 @@ impl<'call> Bus<'call> {
         self.dmc_dma_state = DMAState::Pending;
         self.dmc_dma_reload = reload;
         self.dmc_dma_addr = addr;
+        self.dmc_dma_retry = false;
     }
 
     fn handle_dma(&mut self) {
@@ -205,8 +212,19 @@ impl<'call> Bus<'call> {
                 DMAState::Idle => {}
                 DMAState::Pending => {
                     if !self.cpu_writing {
-                        self.rdy = false;
-                        self.dmc_dma_state = DMAState::DMCDummy;
+                        let halt = if self.dmc_dma_reload {
+                            self.apu.put_cycle
+                        } else {
+                            !self.apu.put_cycle
+                        };
+                        if halt || self.dmc_dma_retry {
+                            self.rdy = false;
+                            self.dmc_dma_state = DMAState::DMCDummy;
+                        } else {
+                            self.dmc_dma_retry = true;
+                        }
+                    } else {
+                        self.dmc_dma_retry = true;
                     }
                 }
                 DMAState::DMCDummy => {

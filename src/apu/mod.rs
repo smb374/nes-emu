@@ -35,6 +35,7 @@ pub struct APU {
     pub triag: TriangleChannel,
     pub noise: NoiseChannel,
     pub dmc: DMCChannel,
+    dmc_dma_schedule: Option<usize>,
     clear_irq_flag: bool,
 
     cycles: usize,
@@ -83,7 +84,7 @@ impl APU {
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
             .unwrap_or_default()
-            .as_micros();
+            .as_millis();
 
         Self {
             status: APUStatus::default(),
@@ -95,6 +96,7 @@ impl APU {
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),
+            dmc_dma_schedule: None,
             clear_irq_flag: false,
 
             cycles: 0,
@@ -136,6 +138,11 @@ impl APU {
         self.put_cycle = !self.put_cycle;
         if !self.put_cycle {
             self.fcycles += 1;
+            if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
+                self.dmc.dma_sample = true;
+                self.dmc.dma_reload = false;
+                self.dmc_dma_schedule = None;
+            }
         }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {
@@ -306,7 +313,7 @@ impl APU {
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
             if self.dmc.sample_buffer_empty {
-                self.dmc.dma_reload = false;
+                self.dmc_dma_schedule = Some(self.fcycles + 1);
             }
             self.dmc.start();
         } else {
