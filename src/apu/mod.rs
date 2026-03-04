@@ -313,7 +313,7 @@ impl APU {
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
             if self.dmc.sample_buffer_empty {
-                self.dmc_dma_schedule = Some(self.fcycles + 1);
+                self.dmc_dma_schedule = Some(self.fcycles + 2);
             }
             self.dmc.start();
         } else {

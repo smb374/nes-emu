@@ -5,13 +5,11 @@ A NES emu in Rust
 ## Features
 
 - Implements full CPU instruction emulation.
-- Passing 92* tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
+- Passing 100 tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
 - Support iNES mapper 0-4, 7
 - Accurate PPU VBLANK timing & NMI control
 - Plays Battletoads
 - Battery save support through whole RAM snapshot
-
-*: Sprite 0 Hit & Sprite Overflow fails when running all tests but succeeds when running individually.
 
 ## Building
 
@@ -47,9 +45,6 @@ Currently only supports single controller with static binding:
 AccuracyCoin run all result screen:
 ![AccuracyCoin Result](./screenshots/AccuracyCoinResult.png)
 
-AccuracyCoin sprite flags individual run result:
-![AccuracyCoin Sprite Flag Result](./screenshots/AccuracyCoinSpriteResult.png)
-
 ## Gameplay Screenshots
 
 ![Battletoads Map](./screenshots/battletoads_stage_map.png)
@@ -60,10 +55,12 @@ AccuracyCoin sprite flags individual run result:
 
 ## Roadmap
 
-- [ ] Improve DMA accuracy by implementing RDY line control, get/put cycles, and
-  cycle alignment rather than current hard-coded stuff
+- [ ] ~~Improve DMA accuracy by implementing RDY line control, get/put cycles, and
+  cycle alignment rather than current hard-coded stuff~~
+  Implementation done, but not passing tests.
 - [ ] Implement correct instruction behavior for SHA, SHS, SHX, SHY to
   account for RDY line assertion when DMA occurrence
+  - Unknown requirements for this.
 - [ ] Improve NMI overlapping behavior
 - [ ] Improve PPU accuracy
 - [ ] Improve APU accuracy
