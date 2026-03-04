@@ -112,11 +112,11 @@ impl APU {
     pub fn tick(&mut self) {
         self.cycles += 1;
 
-        self.step_frame_sequencer();
         if self.clear_irq_flag && !self.put_cycle {
             self.clear_irq_flag = false;
             self.status.remove(APUStatus::FRAME_INTERRUPT);
         }
+        self.step_frame_sequencer();
         self.triag.clock_timer();
         self.dmc.clock_timer();
 
@@ -163,15 +163,13 @@ impl APU {
                     self.clock_envelopes();
                 }
                 (14914, false) => {
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.status.insert(APUStatus::FRAME_INTERRUPT);
                     self.irq_sig = self.frame_counter.emit_irq();
                 }
                 (14914, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
+                    self.status.insert(APUStatus::FRAME_INTERRUPT);
                     self.irq_sig = self.frame_counter.emit_irq();
                 }
                 (14915, false) => {
