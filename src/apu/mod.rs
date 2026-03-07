@@ -119,6 +119,9 @@ impl APU {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
         }
         self.step_frame_sequencer();
+        if self.frame_counter.contains(FrameCounter::IRQ_INHIBIT) && self.fcycles != 14914 {
+            self.status.remove(APUStatus::FRAME_INTERRUPT);
+        }
         self.triag.clock_timer();
         self.dmc.clock_timer();
 
@@ -131,9 +134,9 @@ impl APU {
         self.generate_samples();
         self.status.set(APUStatus::DMC_INTERRUPT, self.dmc.irq_flag);
 
-        self.irq_sig = self.dmc.irq_flag
-            || (self.status.contains(APUStatus::FRAME_INTERRUPT)
-                && !self.frame_counter.contains(FrameCounter::IRQ_INHIBIT));
+        self.irq_sig = self
+            .status
+            .intersects(APUStatus::DMC_INTERRUPT | APUStatus::FRAME_INTERRUPT);
 
         self.put_cycle = !self.put_cycle;
         if !self.put_cycle {

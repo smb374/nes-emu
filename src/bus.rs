@@ -66,6 +66,7 @@ pub struct Bus<'call> {
     cycles: usize,
     cycles_acc: usize,
     joypad1: Joypad,
+    j1_data: Option<u8>,
     joypad2: Joypad,
     cb: Box<dyn FnMut(&PPU, &mut Joypad) -> bool + 'call>,
 
@@ -104,6 +105,7 @@ impl<'call> Bus<'call> {
             cycles: 0,
             cycles_acc: 0,
             cb: Box::new(f),
+            j1_data: None,
 
             oam_dma_state: DMAState::default(),
             oam_dma_addr: 0,
@@ -118,8 +120,16 @@ impl<'call> Bus<'call> {
 
     pub fn tick(&mut self) -> (bool, bool) {
         self.cycles += 1;
+        let pb = self.apu.put_cycle;
         self.apu.tick();
+        let pa = self.apu.put_cycle;
 
+        if !pb && pa {
+            // get -> put
+            if let Some(dat) = self.j1_data.take() {
+                self.joypad1.write(dat);
+            }
+        }
         if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
             self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
         }
@@ -451,7 +461,9 @@ impl<'call> Mem for Bus<'call> {
 
             0x4015 => self.apu.write_status(data),
 
-            0x4016 => self.joypad1.write(data),
+            0x4016 => {
+                self.j1_data = Some(data);
+            }
 
             0x4017 => self.apu.write_frame_counter(data),
 
