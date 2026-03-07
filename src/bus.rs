@@ -138,7 +138,7 @@ impl<'call> Bus<'call> {
         let mapper_irq = self.rom.irq_sig;
         self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
-        self.apu.irq_sig = false;
+        self.apu.irq_sig = self.apu.dmc.irq_flag;
 
         (mapper_irq || apu_irq, false)
     }
