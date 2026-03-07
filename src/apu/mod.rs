@@ -129,11 +129,11 @@ impl APU {
         }
 
         self.generate_samples();
-        if self.dmc.irq_flag {
-            self.status.insert(APUStatus::DMC_INTERRUPT);
-        }
+        self.status.set(APUStatus::DMC_INTERRUPT, self.dmc.irq_flag);
 
-        self.irq_sig = self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT);
+        self.irq_sig = self.dmc.irq_flag
+            || (self.status.contains(APUStatus::FRAME_INTERRUPT)
+                && !self.frame_counter.contains(FrameCounter::IRQ_INHIBIT));
 
         self.put_cycle = !self.put_cycle;
         if !self.put_cycle {
@@ -170,22 +170,17 @@ impl APU {
                     self.clock_envelopes();
                 }
                 (14914, false) => {
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
+                    self.status.set(APUStatus::FRAME_INTERRUPT, true);
                 }
                 (14914, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
+                    self.status.set(APUStatus::FRAME_INTERRUPT, true);
                 }
                 (14915, false) => {
                     self.fcycles = 0;
                     self.status
                         .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
                 }
                 _ => {}
             }
