@@ -116,10 +116,7 @@ impl DMCChannel {
 
     /// Clock the timer
     pub fn clock_timer(&mut self) {
-        if self.dma_sample {
-            return;
-        }
-        // Timer
+        // Timer continues to run even during DMA
         if self.timer_counter == 0 {
             self.timer_counter = self.timer_period;
             self.clock_output_unit();
@@ -127,8 +124,8 @@ impl DMCChannel {
             self.timer_counter -= 1;
         }
 
-        // Memory reader
-        if self.sample_buffer_empty && self.bytes_remaining > 0 {
+        // Memory reader - request DMA if buffer is empty and we have bytes to fetch
+        if self.sample_buffer_empty && self.bytes_remaining > 0 && !self.dma_sample {
             self.dma_sample = true;
             self.dma_reload = true;
         }
@@ -146,8 +143,7 @@ impl DMCChannel {
             self.current_address += 1;
         }
 
-        self.bytes_remaining -= 1;
-
+        self.bytes_remaining = self.bytes_remaining.saturating_sub(1);
         if self.bytes_remaining == 0 {
             if self.loop_flag {
                 self.restart_sample();
@@ -177,6 +173,10 @@ impl DMCChannel {
             self.shift_register >>= 1;
         }
 
+        // Decrement bits remaining FIRST
+        self.bits_remaining -= 1;
+
+        // When counter reaches 0, load a new byte
         if self.bits_remaining == 0 {
             self.bits_remaining = 8;
 
@@ -187,8 +187,6 @@ impl DMCChannel {
                 self.shift_register = self.sample_buffer;
                 self.sample_buffer_empty = true;
             }
-        } else {
-            self.bits_remaining -= 1;
         }
     }
 
