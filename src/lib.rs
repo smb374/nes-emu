@@ -6,7 +6,6 @@ pub mod joypad;
 pub mod mapper;
 pub mod opcodes;
 pub mod ppu;
-pub mod trace;
 pub mod utils;
 
 pub trait Mem {

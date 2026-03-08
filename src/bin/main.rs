@@ -163,9 +163,7 @@ fn main() {
     let mut cpu = CPU::new(bus);
 
     cpu.reset();
-    cpu.run_with_cb(|cpu| {
-        log::trace!("{}", nes_emu::trace::trace(cpu));
-    });
+    cpu.run();
 
     // Save PRG-RAM on exit
     if let Err(e) = cpu.save_prg_ram() {

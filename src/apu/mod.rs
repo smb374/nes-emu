@@ -141,11 +141,11 @@ impl APU {
         self.put_cycle = !self.put_cycle;
         if !self.put_cycle {
             self.fcycles += 1;
-            if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
-                self.dmc.dma_sample = true;
-                self.dmc.dma_reload = false;
-                self.dmc_dma_schedule = None;
-            }
+        }
+        if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
+            self.dmc.dma_sample = true;
+            self.dmc.dma_reload = false;
+            self.dmc_dma_schedule = None;
         }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {

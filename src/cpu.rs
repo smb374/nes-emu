@@ -73,6 +73,7 @@ pub struct CPU<'a> {
     pub tick_disable: bool,
     nmi_delay: Option<bool>,
     nmi_latch: Option<u8>,
+    addr: Option<u16>,
 }
 
 impl<'a> Mem for CPU<'a> {
@@ -111,6 +112,7 @@ impl<'a> CPU<'a> {
             tick_disable: false,
             nmi_delay: None,
             nmi_latch: None,
+            addr: None,
         }
     }
 
@@ -153,6 +155,26 @@ impl<'a> CPU<'a> {
             if let Some(op) = OPS[opcode as usize] {
                 let prev_intr_disable = self.status.contains(CpuFlags::INTR_DISABLE);
                 self.run_op(op);
+                if let Some(addr) = self.addr.take() {
+                    log::trace!(
+                        "{:04X} {} ${:04X} A:{:02X} X:{:02X} Y:{:02X}",
+                        pc_cache - 1,
+                        op.mnemonic,
+                        addr,
+                        self.reg_a,
+                        self.reg_x,
+                        self.reg_y,
+                    );
+                } else {
+                    log::trace!(
+                        "{:04X} {}       A:{:02X} X:{:02X} Y:{:02X}",
+                        pc_cache - 1,
+                        op.mnemonic,
+                        self.reg_a,
+                        self.reg_x,
+                        self.reg_y,
+                    );
+                }
                 if self.exit_sig {
                     break;
                 }
@@ -280,6 +302,7 @@ impl<'a> CPU<'a> {
 
             let old_pc = self.pc;
             let new_pc = self.pc.wrapping_add_signed(offset);
+            self.addr = Some(new_pc);
 
             if Self::page_crossed(old_pc, new_pc) {
                 // Another dummy read from wrong address
@@ -300,7 +323,7 @@ impl<'a> CPU<'a> {
         mode: Option<AddressMode>,
         instr_type: InstructionType,
     ) -> Option<u16> {
-        match mode {
+        let addr = match mode {
             None => None,
             Some(m) => match m {
                 AddressMode::IMM => {
@@ -407,7 +430,9 @@ impl<'a> CPU<'a> {
                 }
                 _ => None,
             },
-        }
+        };
+        self.addr = addr;
+        addr
     }
 
     fn run_op(&mut self, op: Op) {
@@ -568,6 +593,7 @@ impl<'a> CPU<'a> {
                 self.push_stack_u16(self.pc);
                 let hi = self.read_u8(self.pc) as u16;
                 self.pc = (hi << 8) | lo;
+                self.addr = Some(self.pc);
             }
             LDA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
