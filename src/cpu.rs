@@ -155,22 +155,24 @@ impl<'a> CPU<'a> {
                 self.run_op(op);
                 if let Some(addr) = self.addr.take() {
                     log::trace!(
-                        "{:04X} {} ${:04X} A:{:02X} X:{:02X} Y:{:02X}",
+                        "{:04X} {} ${:04X} A:{:02X} X:{:02X} Y:{:02X} F:{:02X}",
                         pc_cache - 1,
                         op.mnemonic,
                         addr,
                         self.reg_a,
                         self.reg_x,
                         self.reg_y,
+                        self.status.bits()
                     );
                 } else {
                     log::trace!(
-                        "{:04X} {}       A:{:02X} X:{:02X} Y:{:02X}",
+                        "{:04X} {}       A:{:02X} X:{:02X} Y:{:02X} F:{:02X}",
                         pc_cache - 1,
                         op.mnemonic,
                         self.reg_a,
                         self.reg_x,
                         self.reg_y,
+                        self.status.bits()
                     );
                 }
                 if self.exit_sig {
@@ -251,6 +253,11 @@ impl<'a> CPU<'a> {
 
         self.status.insert(CpuFlags::INTR_DISABLE);
         self.pc = self.read_u16(vector);
+        match intr_type {
+            InterruptType::BRK => log::info!("/BRK -> {:04X}", self.pc),
+            InterruptType::IRQ => log::info!("/IRQ -> {:04X}", self.pc),
+            InterruptType::NMI => log::info!("/NMI -> {:04X}", self.pc),
+        }
     }
 
     fn interrupt_nmi(&mut self) {
