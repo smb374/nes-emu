@@ -70,7 +70,6 @@ pub struct CPU<'a> {
     irq_sig: bool,
     exit_sig: bool,
     pub cycles: usize,
-    pub tick_disable: bool,
     nmi_delay: Option<bool>,
     nmi_latch: Option<u8>,
     addr: Option<u16>,
@@ -109,7 +108,6 @@ impl<'a> CPU<'a> {
             irq_sig: false,
             exit_sig: false,
             cycles: 0,
-            tick_disable: false,
             nmi_delay: None,
             nmi_latch: None,
             addr: None,
@@ -214,21 +212,27 @@ impl<'a> CPU<'a> {
     }
 
     fn tick(&mut self) {
-        if !self.tick_disable {
-            let (irq, exit) = self.bus.tick();
-            self.irq_sig |= irq;
-            self.exit_sig |= exit;
-
-            self.cycles += 1;
-            if self.nmi_latch.is_none() {
-                self.nmi_latch = self.bus.poll_nmi_status();
-            }
+        self.exit_sig |= self.bus.tick();
+        self.cycles += 1;
+        if self.nmi_latch.is_none() {
+            self.nmi_latch = self.bus.poll_nmi_status();
         }
     }
 
     fn interrupt_sequence(&mut self, intr_type: InterruptType) {
-        self.push_stack_u16(self.pc);
+        let pc_buf = self.pc.to_le_bytes();
+        self.poll_intr();
+        self.push_stack(pc_buf[1]);
+        self.poll_intr();
+        self.push_stack(pc_buf[0]);
+        self.poll_intr();
+
         let is_brk = intr_type == InterruptType::BRK;
+        let mut status = self.status;
+        status.set(CpuFlags::BREAK, is_brk);
+        status.insert(CpuFlags::BREAK2);
+        self.push_stack(status.bits());
+
         let vector = match intr_type {
             InterruptType::BRK | InterruptType::IRQ => {
                 if let Some(s) = self.nmi_latch.take() {
@@ -244,11 +248,6 @@ impl<'a> CPU<'a> {
             }
             InterruptType::NMI => 0xFFFA,
         };
-
-        let mut status = self.status;
-        status.set(CpuFlags::BREAK, is_brk);
-        status.insert(CpuFlags::BREAK2);
-        self.push_stack(status.bits());
 
         self.status.insert(CpuFlags::INTR_DISABLE);
         self.pc = self.read_u16(vector);
@@ -292,11 +291,15 @@ impl<'a> CPU<'a> {
         self.status.set(CpuFlags::NEGATIVE, val & 0x80 != 0);
     }
 
+    fn poll_intr(&mut self) {
+        self.irq_sig |= self.bus.poll_irq_status();
+    }
+
     fn branch_if(&mut self, condition: bool) {
+        self.poll_intr();
         let offset = self.read_u8(self.pc) as i8 as i16;
         self.pc = self.pc.wrapping_add(1);
         if condition {
-            // Dummy read while adding offset to PCL
             self.bus.read_u8(self.pc);
             self.tick();
 
@@ -305,8 +308,8 @@ impl<'a> CPU<'a> {
             self.addr = Some(new_pc);
 
             if Self::page_crossed(old_pc, new_pc) {
-                // Another dummy read from wrong address
                 let wrong_pc = (old_pc & 0xFF00) | (new_pc & 0x00FF);
+                self.poll_intr();
                 self.bus.read_u8(wrong_pc);
                 self.tick();
             }
@@ -440,6 +443,7 @@ impl<'a> CPU<'a> {
             ADC => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
                 let sum = self.reg_a as u16 + val as u16 + car;
@@ -458,6 +462,7 @@ impl<'a> CPU<'a> {
             AND => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_a &= self.read_u8(addr);
                 self.update_nz(self.reg_a);
             }
@@ -466,6 +471,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, (self.reg_a & 0x80) != 0);
                     self.reg_a <<= 1;
                     self.update_nz(self.reg_a);
+                    self.poll_intr();
                     self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
@@ -475,6 +481,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, (val & 0x80) != 0);
                     val <<= 1;
                     self.update_nz(val);
+                    self.poll_intr();
                     self.write_u8(addr, val);
                 }
             }
@@ -484,6 +491,7 @@ impl<'a> CPU<'a> {
             BIT => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 let res = self.reg_a & val;
                 self.status.set(CpuFlags::ZERO, res == 0);
@@ -494,6 +502,7 @@ impl<'a> CPU<'a> {
             BNE => self.branch_if(!self.status.contains(CpuFlags::ZERO)),
             BPL => self.branch_if(!self.status.contains(CpuFlags::NEGATIVE)),
             BRK => {
+                self.poll_intr();
                 self.read_u8(self.pc);
                 self.pc += 1;
                 self.interrupt_sequence(InterruptType::BRK);
@@ -502,23 +511,28 @@ impl<'a> CPU<'a> {
             BVS => self.branch_if(self.status.contains(CpuFlags::OVERFLOW)),
             CLC => {
                 self.status &= !CpuFlags::CARRY;
+                self.poll_intr();
                 self.tick();
             }
             CLD => {
                 self.status &= !CpuFlags::DECIMAL;
+                self.poll_intr();
                 self.tick();
             }
             CLI => {
+                self.poll_intr();
                 self.status &= !CpuFlags::INTR_DISABLE;
                 self.tick();
             }
             CLV => {
                 self.status &= !CpuFlags::OVERFLOW;
+                self.poll_intr();
                 self.tick();
             }
             CMP => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let (res, car) = self.reg_a.overflowing_sub(self.read_u8(addr));
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
@@ -526,6 +540,7 @@ impl<'a> CPU<'a> {
             CPX => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let (res, car) = self.reg_x.overflowing_sub(self.read_u8(addr));
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
@@ -533,6 +548,7 @@ impl<'a> CPU<'a> {
             CPY => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let (res, car) = self.reg_y.overflowing_sub(self.read_u8(addr));
                 self.status.set(CpuFlags::CARRY, !car);
                 self.update_nz(res);
@@ -543,22 +559,26 @@ impl<'a> CPU<'a> {
                 let val = self.read_u8(addr);
                 self.write_u8(addr, val);
                 let res = val.wrapping_sub(1);
+                self.poll_intr();
                 self.write_u8(addr, res);
                 self.update_nz(res);
             }
             DEX => {
                 self.reg_x = self.reg_x.wrapping_sub(1);
                 self.update_nz(self.reg_x);
+                self.poll_intr();
                 self.tick();
             }
             DEY => {
                 self.reg_y = self.reg_y.wrapping_sub(1);
                 self.update_nz(self.reg_y);
+                self.poll_intr();
                 self.tick();
             }
             EOR => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_a ^= self.read_u8(addr);
                 self.update_nz(self.reg_a);
             }
@@ -568,21 +588,25 @@ impl<'a> CPU<'a> {
                 let val = self.read_u8(addr);
                 self.write_u8(addr, val);
                 let res = val.wrapping_add(1);
+                self.poll_intr();
                 self.write_u8(addr, res);
                 self.update_nz(res);
             }
             INX => {
                 self.reg_x = self.reg_x.wrapping_add(1);
                 self.update_nz(self.reg_x);
+                self.poll_intr();
                 self.tick();
             }
             INY => {
                 self.reg_y = self.reg_y.wrapping_add(1);
                 self.update_nz(self.reg_y);
+                self.poll_intr();
                 self.tick();
             }
             JMP => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
+                self.poll_intr();
                 self.pc = addr_opt.unwrap();
             }
             JSR => {
@@ -591,6 +615,7 @@ impl<'a> CPU<'a> {
                 self.bus.read_u8(STACK_BASE + self.sp as u16);
                 self.tick();
                 self.push_stack_u16(self.pc);
+                self.poll_intr();
                 let hi = self.read_u8(self.pc) as u16;
                 self.pc = (hi << 8) | lo;
                 self.addr = Some(self.pc);
@@ -598,18 +623,21 @@ impl<'a> CPU<'a> {
             LDA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_a = self.read_u8(addr);
                 self.update_nz(self.reg_a);
             }
             LDX => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_x = self.read_u8(addr);
                 self.update_nz(self.reg_x);
             }
             LDY => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_y = self.read_u8(addr);
                 self.update_nz(self.reg_y);
             }
@@ -618,6 +646,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, (self.reg_a & 0x01) != 0);
                     self.reg_a >>= 1;
                     self.update_nz(self.reg_a);
+                    self.poll_intr();
                     self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
@@ -627,39 +656,52 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
                     val >>= 1;
                     self.update_nz(val);
+                    self.poll_intr();
                     self.write_u8(addr, val);
                 }
             }
             NOP => {
+                self.poll_intr();
                 self.read_u8(self.pc);
             }
             ORA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_a |= self.read_u8(addr);
                 self.update_nz(self.reg_a);
             }
             PHA => {
                 self.push_stack(self.reg_a);
+                self.poll_intr();
                 self.tick();
             }
             PHP => {
                 self.push_stack((self.status | CpuFlags::BREAK | CpuFlags::BREAK2).bits());
+                self.poll_intr();
                 self.tick();
             }
             PLA => {
                 self.reg_a = self.pop_stack();
                 self.update_nz(self.reg_a);
                 self.tick();
+                self.poll_intr();
                 self.tick();
             }
             PLP => {
-                let mut status = CpuFlags::from_bits_retain(self.pop_stack());
+                // PLP: 4 cycles. (1) opcode, (2) dummy read, (3) inc SP, (4) pull flags.
+                // Polling happens before the flags are pulled off the stack,
+                // so it uses the OLD I flag value.
+                self.tick(); // cycle 2: dummy read
+                self.sp = self.sp.wrapping_add(1); // cycle 3: increment SP
+                self.tick();
+                self.poll_intr(); // poll with old I flag
+                let mut status = CpuFlags::from_bits_retain(
+                    self.read_u8(STACK_BASE + self.sp as u16), // cycle 4: pull flags
+                );
                 status &= !CpuFlags::BREAK;
                 status |= CpuFlags::BREAK2;
                 self.status = status;
-                self.tick();
-                self.tick();
             }
             ROL => {
                 let ocar = self.status.contains(CpuFlags::CARRY);
@@ -668,6 +710,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, car);
                     self.reg_a = res;
                     self.update_nz(self.reg_a);
+                    self.poll_intr();
                     self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
@@ -677,6 +720,7 @@ impl<'a> CPU<'a> {
                     let (res, car) = utils::rol(val, ocar);
                     self.status.set(CpuFlags::CARRY, car);
                     self.update_nz(res);
+                    self.poll_intr();
                     self.write_u8(addr, res);
                 }
             }
@@ -687,6 +731,7 @@ impl<'a> CPU<'a> {
                     self.status.set(CpuFlags::CARRY, car);
                     self.reg_a = res;
                     self.update_nz(self.reg_a);
+                    self.poll_intr();
                     self.tick();
                 } else {
                     let addr_opt = self.operand_addr(op.mode, InstructionType::Rmw);
@@ -696,6 +741,7 @@ impl<'a> CPU<'a> {
                     let (res, car) = utils::ror(val, ocar);
                     self.status.set(CpuFlags::CARRY, car);
                     self.update_nz(res);
+                    self.poll_intr();
                     self.write_u8(addr, res);
                 }
             }
@@ -706,18 +752,23 @@ impl<'a> CPU<'a> {
                 status &= !CpuFlags::BREAK;
                 status |= CpuFlags::BREAK2;
                 self.status = status;
-                self.pc = self.pop_stack_u16();
+                let pc_lo = self.pop_stack();
+                self.poll_intr();
+                let pc_hi = self.pop_stack();
+                self.pc = u16::from_le_bytes([pc_lo, pc_hi]);
             }
             RTS => {
                 self.tick();
                 self.tick();
                 self.pc = self.pop_stack_u16() + 1;
+                self.poll_intr();
                 self.tick();
             }
             SBC => {
                 // ADC with inverted operand
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
                 let sum = self.reg_a as u16 + (val ^ 0xFF) as u16 + car;
@@ -735,64 +786,77 @@ impl<'a> CPU<'a> {
             }
             SEC => {
                 self.status |= CpuFlags::CARRY;
+                self.poll_intr();
                 self.tick();
             }
             SED => {
                 self.status |= CpuFlags::DECIMAL;
+                self.poll_intr();
                 self.tick();
             }
             SEI => {
+                self.poll_intr();
                 self.status |= CpuFlags::INTR_DISABLE;
                 self.tick();
             }
             STA => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.write_u8(addr, self.reg_a);
             }
             STX => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.write_u8(addr, self.reg_x);
             }
             STY => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.write_u8(addr, self.reg_y);
             }
             TAX => {
                 self.reg_x = self.reg_a;
                 self.update_nz(self.reg_x);
+                self.poll_intr();
                 self.tick();
             }
             TAY => {
                 self.reg_y = self.reg_a;
                 self.update_nz(self.reg_y);
+                self.poll_intr();
                 self.tick();
             }
             TSX => {
                 self.reg_x = self.sp;
                 self.update_nz(self.reg_x);
+                self.poll_intr();
                 self.tick();
             }
             TXA => {
                 self.reg_a = self.reg_x;
                 self.update_nz(self.reg_a);
+                self.poll_intr();
                 self.tick();
             }
             TXS => {
                 self.sp = self.reg_x;
+                self.poll_intr();
                 self.tick();
             }
             TYA => {
                 self.reg_a = self.reg_y;
                 self.update_nz(self.reg_a);
+                self.poll_intr();
                 self.tick();
             }
             // Unofficial
             AAC => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_a &= self.read_u8(addr);
                 self.update_nz(self.reg_a);
                 self.status
@@ -802,11 +866,13 @@ impl<'a> CPU<'a> {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Write);
                 let addr = addr_opt.unwrap();
                 let res = self.reg_a & self.reg_x;
+                self.poll_intr();
                 self.write_u8(addr, res);
             }
             ARR => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 let (res, _) = utils::ror(self.reg_a & val, self.status.contains(CpuFlags::CARRY));
                 self.reg_a = res;
@@ -833,6 +899,7 @@ impl<'a> CPU<'a> {
             ASR => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.reg_a & self.read_u8(addr);
                 self.reg_a = val >> 1;
                 self.update_nz(self.reg_a);
@@ -842,6 +909,7 @@ impl<'a> CPU<'a> {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
                 self.reg_a |= 0xFF;
+                self.poll_intr();
                 self.reg_a &= self.read_u8(addr);
                 self.reg_x = self.reg_a;
                 self.update_nz(self.reg_a);
@@ -866,6 +934,7 @@ impl<'a> CPU<'a> {
                         } else {
                             addr
                         };
+                        self.poll_intr();
                         self.write_u8(write_addr, res);
                     }
                     Some(INDY) => {
@@ -889,6 +958,7 @@ impl<'a> CPU<'a> {
                         } else {
                             addr
                         };
+                        self.poll_intr();
                         self.write_u8(write_addr, res);
                     }
                     _ => unreachable!(),
@@ -897,6 +967,7 @@ impl<'a> CPU<'a> {
             AXS => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 self.reg_x &= self.reg_a;
                 let sum = self.reg_x as u16 + (val ^ 0xFF) as u16 + 1;
@@ -910,6 +981,7 @@ impl<'a> CPU<'a> {
                 let val = self.read_u8(addr);
                 self.write_u8(addr, val);
                 let res = val.wrapping_sub(1);
+                self.poll_intr();
                 self.write_u8(addr, res);
                 self.update_nz(res);
                 let (res, car) = self.reg_a.overflowing_sub(res);
@@ -918,6 +990,7 @@ impl<'a> CPU<'a> {
             }
             DOP => {
                 let addr = self.operand_addr(op.mode, InstructionType::Read);
+                self.poll_intr();
                 self.read_u8(addr.unwrap_or(self.pc));
             }
             ISC => {
@@ -926,6 +999,7 @@ impl<'a> CPU<'a> {
                 let mut val = self.read_u8(addr);
                 self.write_u8(addr, val);
                 val = val.wrapping_add(1);
+                self.poll_intr();
                 self.write_u8(addr, val);
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
                 let sum = self.reg_a as u16 + (val ^ 0xFF) as u16 + car;
@@ -947,6 +1021,7 @@ impl<'a> CPU<'a> {
             LAR => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 self.sp &= val;
                 self.reg_a = self.sp;
@@ -956,6 +1031,7 @@ impl<'a> CPU<'a> {
             LAX => {
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 let val = self.read_u8(addr);
                 self.reg_a = val;
                 self.reg_x = val;
@@ -970,6 +1046,7 @@ impl<'a> CPU<'a> {
                 let (res, car) = utils::rol(val, ocar);
                 self.status.set(CpuFlags::CARRY, car);
                 self.update_nz(res);
+                self.poll_intr();
                 self.write_u8(addr, res);
                 self.reg_a &= res;
                 self.update_nz(self.reg_a);
@@ -983,6 +1060,7 @@ impl<'a> CPU<'a> {
                 let (res, car) = utils::ror(val, ocar);
                 self.status.set(CpuFlags::CARRY, car);
                 self.update_nz(res);
+                self.poll_intr();
                 self.write_u8(addr, res);
                 let val = res;
                 let car = self.status.contains(CpuFlags::CARRY) as u16;
@@ -1007,6 +1085,7 @@ impl<'a> CPU<'a> {
                 self.status.set(CpuFlags::CARRY, (val & 0x80) != 0);
                 val <<= 1;
                 self.update_nz(val);
+                self.poll_intr();
                 self.write_u8(addr, val);
                 self.reg_a |= val;
                 self.update_nz(self.reg_a);
@@ -1019,6 +1098,7 @@ impl<'a> CPU<'a> {
                 self.status.set(CpuFlags::CARRY, (val & 0x01) != 0);
                 val >>= 1;
                 self.update_nz(val);
+                self.poll_intr();
                 self.write_u8(addr, val);
                 self.reg_a ^= val;
                 self.update_nz(self.reg_a);
@@ -1044,6 +1124,7 @@ impl<'a> CPU<'a> {
                 } else {
                     addr
                 };
+                self.poll_intr();
                 self.write_u8(write_addr, res);
             }
             SYA => {
@@ -1067,6 +1148,7 @@ impl<'a> CPU<'a> {
                 } else {
                     addr
                 };
+                self.poll_intr();
                 self.write_u8(write_addr, res);
             }
             TOP => {
@@ -1078,6 +1160,7 @@ impl<'a> CPU<'a> {
                 self.update_nz(self.reg_a);
                 let addr_opt = self.operand_addr(op.mode, InstructionType::Read);
                 let addr = addr_opt.unwrap();
+                self.poll_intr();
                 self.reg_a &= self.read_u8(addr);
                 self.update_nz(self.reg_a);
             }
@@ -1104,6 +1187,7 @@ impl<'a> CPU<'a> {
                 } else {
                     addr
                 };
+                self.poll_intr();
                 self.write_u8(write_addr, res);
             }
         }

@@ -60,6 +60,7 @@ pub struct Bus<'call> {
 
     cpu_writing: bool,
     rdy: bool,
+    irq_line: bool,
 
     cpu_bus: u8,
     ppu_bus: u8,
@@ -97,6 +98,7 @@ impl<'call> Bus<'call> {
 
             cpu_writing: false,
             rdy: true,
+            irq_line: false,
 
             cpu_bus: 0,
             ppu_bus: 0,
@@ -118,7 +120,7 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self) -> (bool, bool) {
+    pub fn tick(&mut self) -> bool {
         self.cycles += 1;
         let pb = self.apu.put_cycle;
         self.apu.tick();
@@ -141,7 +143,7 @@ impl<'call> Bus<'call> {
         if frame_before != frame_after {
             self.ppu_bus = 0;
             if (self.cb)(&self.ppu, &mut self.joypad1) {
-                return (false, true);
+                return true;
             }
         }
 
@@ -150,11 +152,18 @@ impl<'call> Bus<'call> {
         let apu_irq = self.apu.irq_sig;
         self.apu.irq_sig = self.apu.dmc.irq_flag;
 
-        (mapper_irq || apu_irq, false)
+        self.irq_line |= mapper_irq || apu_irq;
+        false
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
         self.ppu.nmi_interrupt.take()
+    }
+
+    pub fn poll_irq_status(&mut self) -> bool {
+        let res = self.irq_line;
+        self.irq_line = self.apu.dmc.irq_flag;
+        res
     }
 
     pub fn save_prg_ram(&self) -> Result<(), String> {

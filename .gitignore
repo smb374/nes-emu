@@ -31,3 +31,4 @@ target
 *.zip
 *.asm
 /nes-test-roms-master/
+/*.txt
