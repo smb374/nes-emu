@@ -318,8 +318,9 @@ impl PPU {
         if is_odd_cycle {
             // Read from primary OAM
             if self.sprite_eval.n < 64 {
-                let oam_offset = (self.sprite_eval.n as usize) * 4 + (self.sprite_eval.m as usize);
-                self.sprite_eval.latch = self.oam_data[oam_offset];
+                let oam_offset = self.sprite_eval.n as usize * 4 + self.sprite_eval.m as usize;
+                self.sprite_eval.latch =
+                    self.oam_data[(self.oam_addr as usize + oam_offset) & 0xFF];
             }
         } else {
             // Even cycle: potentially write to secondary OAM
@@ -363,7 +364,7 @@ impl PPU {
                             self.sprite_eval.m = 0;
                             return;
                         }
-                        _ => {}
+                        _ => unreachable!(),
                     }
                     self.sprite_eval.m += 1;
                 }
