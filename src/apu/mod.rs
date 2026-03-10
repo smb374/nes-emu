@@ -119,6 +119,9 @@ impl APU {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
         }
         self.step_frame_sequencer();
+        if self.frame_counter.contains(FrameCounter::IRQ_INHIBIT) && self.fcycles != 14914 {
+            self.status.remove(APUStatus::FRAME_INTERRUPT);
+        }
         self.triag.clock_timer();
         self.dmc.clock_timer();
 
@@ -129,20 +132,20 @@ impl APU {
         }
 
         self.generate_samples();
-        if self.dmc.irq_flag {
-            self.status.insert(APUStatus::DMC_INTERRUPT);
-        }
+        self.status.set(APUStatus::DMC_INTERRUPT, self.dmc.irq_flag);
 
-        self.irq_sig = self.dmc.irq_flag || self.status.contains(APUStatus::FRAME_INTERRUPT);
+        self.irq_sig = self.dmc.irq_flag
+            || (self.status.contains(APUStatus::FRAME_INTERRUPT)
+                && !self.frame_counter.contains(FrameCounter::IRQ_INHIBIT));
 
         self.put_cycle = !self.put_cycle;
         if !self.put_cycle {
             self.fcycles += 1;
-            if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
-                self.dmc.dma_sample = true;
-                self.dmc.dma_reload = false;
-                self.dmc_dma_schedule = None;
-            }
+        }
+        if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
+            self.dmc.dma_sample = true;
+            self.dmc.dma_reload = false;
+            self.dmc_dma_schedule = None;
         }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
             if delay != 0 {
@@ -170,22 +173,17 @@ impl APU {
                     self.clock_envelopes();
                 }
                 (14914, false) => {
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
+                    self.status.set(APUStatus::FRAME_INTERRUPT, true);
                 }
                 (14914, true) => {
                     self.clock_envelopes();
                     self.clock_length_and_sweep();
-                    self.status
-                        .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
+                    self.status.set(APUStatus::FRAME_INTERRUPT, true);
                 }
                 (14915, false) => {
                     self.fcycles = 0;
                     self.status
                         .set(APUStatus::FRAME_INTERRUPT, self.frame_counter.emit_irq());
-                    self.irq_sig = self.frame_counter.emit_irq();
                 }
                 _ => {}
             }

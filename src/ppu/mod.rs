@@ -7,14 +7,16 @@ use crate::{
     ppu::registers::{ControlRegister, InternalRegisters, MaskRegister, StatusRegister},
 };
 
+const PIXBUF_DIMENSION: usize = 256 * 262 * 3;
+
 // Secondary OAM entry for sprite evaluation
 #[derive(Clone, Copy, Default)]
-struct SecondaryOamEntry {
+struct SOamEntry {
     y: u8,
     tile: u8,
     attr: u8,
     x: u8,
-    sprite_index: u8, // Original OAM index (for sprite 0 detection)
+    sprite_idx: u8, // Original OAM index (for sprite 0 detection)
 }
 
 // Sprite rendering data after pattern fetch
@@ -23,15 +25,14 @@ struct SpriteRenderData {
     pattern_lo: u8,
     pattern_hi: u8,
     attr: u8,
-    x_counter: u8,
-    sprite_index: u8,
+    nx: u8,
+    sprite_idx: u8,
 }
 
 #[derive(Clone, Copy, Default)]
 struct SpriteEvalState {
     n: u8,         // Primary OAM index (0-63)
     m: u8,         // Byte within sprite (0-3)
-    phase: u8,     // 0=clear secondary, 1=evaluation, 2=done
     latch: u8,     // Temporary latch for sprite Y
     write_idx: u8, // Write index into secondary OAM
 }
@@ -53,30 +54,28 @@ pub struct PPU {
     pub cycles: usize,
     pub frames: usize,
 
-    pub frame_buffer: [u8; 256 * 240 * 3],
+    pub frame_buffer: [u8; PIXBUF_DIMENSION],
 
     // Background rendering shift registers
-    bg_pattern_lo: u16,
-    bg_pattern_hi: u16,
-    bg_attrib_lo: u16,
-    bg_attrib_hi: u16,
+    bg_patt: (u16, u16),
+    bg_attr: (u16, u16),
 
     // Latches for the next tile
     bg_nt_id: u8,
-    bg_nt_attrib: u8,
+    bg_nt_attr: u8,
     bg_nt_lsb: u8,
     bg_nt_msb: u8,
 
     // Secondary OAM (8 sprites for next scanline)
-    secondary_oam: [SecondaryOamEntry; 8],
-    secondary_oam_count: u8,
+    soam: [SOamEntry; 8],
+    nsoam: u8,
 
     // Sprite evaluation state
     sprite_eval: SpriteEvalState,
 
     // Sprite render data (after fetches, ready for rendering)
     sprite_render: [SpriteRenderData; 8],
-    sprite_render_count: u8,
+    nsprite_render: u8,
 
     // A12 IRQ state
     a12_state: bool,
@@ -88,7 +87,7 @@ pub struct PPU {
     suppress_vbl: bool,
     start_nmi: bool,
     // Add a new field to PPU struct:
-    nmi_enabled_at_vbl: bool,
+    nmi_enabled: bool,
 }
 
 impl PPU {
@@ -109,23 +108,21 @@ impl PPU {
             cycles: 0,
             frames: 0,
             internal: InternalRegisters::new(),
-            frame_buffer: [0; 256 * 240 * 3],
+            frame_buffer: [0; PIXBUF_DIMENSION],
 
-            bg_pattern_lo: 0,
-            bg_pattern_hi: 0,
-            bg_attrib_lo: 0,
-            bg_attrib_hi: 0,
+            bg_patt: (0, 0),
+            bg_attr: (0, 0),
             bg_nt_id: 0,
-            bg_nt_attrib: 0,
+            bg_nt_attr: 0,
             bg_nt_lsb: 0,
             bg_nt_msb: 0,
 
-            secondary_oam: [SecondaryOamEntry::default(); 8],
-            secondary_oam_count: 0,
+            soam: [SOamEntry::default(); 8],
+            nsoam: 0,
             sprite_eval: SpriteEvalState::default(),
 
             sprite_render: [SpriteRenderData::default(); 8],
-            sprite_render_count: 0,
+            nsprite_render: 0,
 
             a12_state: false,
             a12lo_period: 0,
@@ -133,7 +130,7 @@ impl PPU {
             odd_frame: false,
             suppress_vbl: false,
             start_nmi: false,
-            nmi_enabled_at_vbl: false,
+            nmi_enabled: false,
         }
     }
 
@@ -145,19 +142,19 @@ impl PPU {
             // NOTE: cycles matched here means "Start of cycle x"
             match self.scanline {
                 // Visible scanlines (0-239)
-                0..=239 => self.tick_visible_scanline(rom, rendering_enabled),
+                0..=239 => self.tick_scanline(rom, rendering_enabled),
                 // Post-render scanline (240) - idle
                 240 => {}
                 // VBlank scanlines (241-260)
                 241 => match self.cycles {
                     0 => {
-                        self.nmi_enabled_at_vbl = self.ctrl.contains(ControlRegister::GENERATE_NMI);
+                        self.nmi_enabled = self.ctrl.contains(ControlRegister::GENERATE_NMI);
                     }
                     1 => {
                         if !self.suppress_vbl {
                             self.status.set(StatusRegister::VBLANK_STARTED, true);
                             // Use the latched value from cycle 0, not the current value
-                            self.start_nmi = self.nmi_enabled_at_vbl;
+                            self.start_nmi = self.nmi_enabled;
                         }
                         self.suppress_vbl = false;
                     }
@@ -168,230 +165,16 @@ impl PPU {
                     _ => {}
                 },
                 // Pre-render scanline (261)
-                261 => self.tick_prerender_scanline(rom, rendering_enabled),
+                261 => self.tick_scanline(rom, rendering_enabled),
 
                 _ => {}
             }
         }
     }
 
-    fn tick_prerender_scanline(&mut self, rom: &mut Rom, rendering_enabled: bool) {
-        // Cycle 1: Clear status flags
-        if self.cycles == 1 {
-            self.status.remove(StatusRegister::VBLANK_STARTED);
-            self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
-            self.status.remove(StatusRegister::SPRITE_OVERFLOW);
-            self.start_nmi = false;
-        }
-
-        if !rendering_enabled {
-            return;
-        }
-
-        match self.cycles {
-            // Cycle 0: Initialize sprite evaluation for scanline 0
-            0 => {
-                self.sprite_eval.n = 0;
-                self.sprite_eval.m = 0;
-                self.sprite_eval.phase = 0;
-                self.sprite_eval.write_idx = 0;
-                self.secondary_oam_count = 0;
-                // Clear secondary OAM
-                for i in 0..8 {
-                    self.secondary_oam[i] = SecondaryOamEntry::default();
-                    self.secondary_oam[i].y = 0xFF;
-                    self.secondary_oam[i].tile = 0xFF;
-                    self.secondary_oam[i].attr = 0xFF;
-                    self.secondary_oam[i].x = 0xFF;
-                }
-            }
-
-            // Cycles 1-256: BG fetches (no pixel output) + sprite evaluation for scanline 0
-            1..=64 => {
-                self.fetch_background(rom);
-                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
-            }
-
-            65..=256 => {
-                self.fetch_background(rom);
-                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
-
-                // Sprite evaluation for scanline 0
-                self.tick_sprite_evaluation_prerender();
-
-                if self.cycles == 251 {
-                    self.internal.increment_y();
-                }
-            }
-
-            // Cycle 257: Copy horizontal bits
-            257 => {
-                self.load_bg_shifters();
-                self.internal.copy_horizontal();
-                self.update_a12(rom, self.ctrl.sprt_pattern_addr());
-            }
-
-            // Cycles 258-320: Sprite pattern fetches for scanline 0
-            258..=320 => {
-                self.fetch_sprite_patterns_prerender(rom);
-                self.update_a12(rom, self.ctrl.sprt_pattern_addr());
-
-                // Cycles 280-304: Copy vertical bits repeatedly
-                if (280..=304).contains(&self.cycles) {
-                    self.internal.copy_vertical();
-                }
-            }
-
-            // Cycles 321-336: Fetch first 2 BG tiles for scanline 0
-            321..=336 => {
-                self.fetch_background(rom);
-                self.update_a12(rom, self.ctrl.bknd_pattern_addr());
-            }
-
-            // Cycles 337-340: Unused NT fetches
-            337..=340 => {
-                if (self.cycles - 337) % 2 == 0 {
-                    let v = self.internal.get_v();
-                    let addr = 0x2000 | (v & 0x0FFF);
-                    self.peek_vram(rom, addr);
-                    self.update_a12(rom, self.ctrl.bknd_pattern_addr());
-                }
-            }
-
-            _ => {}
-        }
-    }
-
-    fn tick_sprite_evaluation_prerender(&mut self) {
-        // Sprite evaluation for scanline 0 (next scanline after pre-render)
-        // Same logic as regular evaluation but checking for scanline 0
-
-        if self.secondary_oam_count >= 8 && self.sprite_eval.n >= 64 {
-            return;
-        }
-
-        let is_odd_cycle = self.cycles % 2 == 1;
-
-        if is_odd_cycle {
-            if self.sprite_eval.n < 64 {
-                let oam_offset = (self.sprite_eval.n as usize) * 4 + (self.sprite_eval.m as usize);
-                self.sprite_eval.latch = self.oam_data[oam_offset];
-            }
-        } else {
-            if self.sprite_eval.n >= 64 {
-                return;
-            }
-
-            if self.secondary_oam_count < 8 {
-                if self.sprite_eval.m == 0 {
-                    let sprite_y = self.sprite_eval.latch as u16;
-                    let sprite_size = self.ctrl.sprite_size() as u16;
-                    // For pre-render, next scanline is 0
-                    let next_scanline: u16 = 0;
-
-                    if next_scanline >= sprite_y.wrapping_add(1)
-                        && next_scanline < sprite_y.wrapping_add(1).wrapping_add(sprite_size)
-                    {
-                        let idx = self.secondary_oam_count as usize;
-                        self.secondary_oam[idx].y = self.sprite_eval.latch;
-                        self.secondary_oam[idx].sprite_index = self.sprite_eval.n;
-                        self.sprite_eval.m = 1;
-                    } else {
-                        self.sprite_eval.n += 1;
-                    }
-                } else {
-                    let idx = self.secondary_oam_count as usize;
-                    match self.sprite_eval.m {
-                        1 => self.secondary_oam[idx].tile = self.sprite_eval.latch,
-                        2 => self.secondary_oam[idx].attr = self.sprite_eval.latch,
-                        3 => {
-                            self.secondary_oam[idx].x = self.sprite_eval.latch;
-                            self.secondary_oam_count += 1;
-                            self.sprite_eval.n += 1;
-                            self.sprite_eval.m = 0;
-                            return;
-                        }
-                        _ => {}
-                    }
-                    self.sprite_eval.m += 1;
-                }
-            } else {
-                // Check for sprite overflow (same buggy behavior)
-                if self.sprite_eval.m == 0 {
-                    let sprite_y = self.sprite_eval.latch as u16;
-                    let sprite_size = self.ctrl.sprite_size() as u16;
-                    let next_scanline: u16 = 0;
-
-                    if next_scanline >= sprite_y.wrapping_add(1)
-                        && next_scanline < sprite_y.wrapping_add(1).wrapping_add(sprite_size)
-                    {
-                        self.status.insert(StatusRegister::SPRITE_OVERFLOW);
-                        self.sprite_eval.m = (self.sprite_eval.m + 1) & 3;
-                    }
-                    self.sprite_eval.n += 1;
-                } else {
-                    self.sprite_eval.m = (self.sprite_eval.m + 1) & 3;
-                    if self.sprite_eval.m == 0 {
-                        self.sprite_eval.n += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    fn fetch_sprite_patterns_prerender(&mut self, rom: &mut Rom) {
-        // Same as regular sprite pattern fetch but for scanline 0
-        let sprite_cycle = self.cycles - 258;
-        let sprite_idx = sprite_cycle / 8;
-        let cycle_in_sprite = sprite_cycle % 8;
-
-        if self.cycles == 258 {
-            self.sprite_render_count = self.secondary_oam_count;
-            for i in 0..8 {
-                self.sprite_render[i] = SpriteRenderData::default();
-            }
-        }
-
-        if sprite_idx < 8 {
-            match cycle_in_sprite {
-                0 | 2 => {
-                    let v = self.internal.get_v();
-                    let addr = 0x2000 | (v & 0x0FFF);
-                    self.peek_vram(rom, addr);
-                }
-                4 => {
-                    if (sprite_idx as u8) < self.secondary_oam_count {
-                        let entry = &self.secondary_oam[sprite_idx];
-                        let addr = self.calc_sprite_pattern_addr_for_scanline(entry, true, 0);
-                        let pattern = rom.read_chr(addr);
-                        self.sprite_render[sprite_idx].pattern_lo = pattern;
-                        self.sprite_render[sprite_idx].attr = entry.attr;
-                        self.sprite_render[sprite_idx].x_counter = entry.x;
-                        self.sprite_render[sprite_idx].sprite_index = entry.sprite_index;
-                    } else {
-                        let addr = self.ctrl.sprt_pattern_addr() + 0xFF * 16;
-                        let _ = rom.read_chr(addr);
-                    }
-                }
-                6 => {
-                    if (sprite_idx as u8) < self.secondary_oam_count {
-                        let entry = &self.secondary_oam[sprite_idx];
-                        let addr = self.calc_sprite_pattern_addr_for_scanline(entry, false, 0);
-                        let pattern = rom.read_chr(addr);
-                        self.sprite_render[sprite_idx].pattern_hi = pattern;
-                    } else {
-                        let addr = self.ctrl.sprt_pattern_addr() + 0xFF * 16 + 8;
-                        let _ = rom.read_chr(addr);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn calc_sprite_pattern_addr_for_scanline(
+    fn calc_sprite_pattern_addr(
         &self,
-        entry: &SecondaryOamEntry,
+        entry: &SOamEntry,
         is_low: bool,
         target_scanline: u16,
     ) -> u16 {
@@ -419,7 +202,14 @@ impl PPU {
         if is_low { tile_addr } else { tile_addr + 8 }
     }
 
-    fn tick_visible_scanline(&mut self, rom: &mut Rom, rendering_enabled: bool) {
+    fn tick_scanline(&mut self, rom: &mut Rom, rendering_enabled: bool) {
+        if self.scanline == 261 && self.cycles == 1 {
+            self.status.remove(StatusRegister::VBLANK_STARTED);
+            self.status.remove(StatusRegister::SPRITE_ZERO_HIT);
+            self.status.remove(StatusRegister::SPRITE_OVERFLOW);
+            self.start_nmi = false;
+        }
+
         if !rendering_enabled {
             return;
         }
@@ -430,9 +220,8 @@ impl PPU {
                 // Initialize sprite evaluation state for this scanline
                 self.sprite_eval.n = 0;
                 self.sprite_eval.m = 0;
-                self.sprite_eval.phase = 0; // Start with secondary OAM clear
                 self.sprite_eval.write_idx = 0;
-                self.secondary_oam_count = 0;
+                self.nsoam = 0;
             }
 
             // Cycles 1-64: Clear secondary OAM (writes 0xFF)
@@ -448,10 +237,10 @@ impl PPU {
                         let sprite_idx = idx / 4;
                         let byte_idx = idx % 4;
                         match byte_idx {
-                            0 => self.secondary_oam[sprite_idx].y = 0xFF,
-                            1 => self.secondary_oam[sprite_idx].tile = 0xFF,
-                            2 => self.secondary_oam[sprite_idx].attr = 0xFF,
-                            3 => self.secondary_oam[sprite_idx].x = 0xFF,
+                            0 => self.soam[sprite_idx].y = 0xFF,
+                            1 => self.soam[sprite_idx].tile = 0xFF,
+                            2 => self.soam[sprite_idx].attr = 0xFF,
+                            3 => self.soam[sprite_idx].x = 0xFF,
                             _ => {}
                         }
                     }
@@ -489,6 +278,9 @@ impl PPU {
             258..=320 => {
                 self.fetch_sprite_patterns(rom);
                 self.update_a12(rom, self.ctrl.sprt_pattern_addr());
+                if self.scanline == 261 && (280..=304).contains(&self.cycles) {
+                    self.internal.copy_vertical();
+                }
             }
 
             // Cycles 321-336: Fetch first 2 BG tiles for next scanline
@@ -516,7 +308,7 @@ impl PPU {
         // On odd cycles: read from primary OAM
         // On even cycles: write to secondary OAM (if applicable)
 
-        if self.secondary_oam_count >= 8 && self.sprite_eval.n >= 64 {
+        if self.nsoam >= 8 && self.sprite_eval.n >= 64 {
             // Done with evaluation
             return;
         }
@@ -526,8 +318,9 @@ impl PPU {
         if is_odd_cycle {
             // Read from primary OAM
             if self.sprite_eval.n < 64 {
-                let oam_offset = (self.sprite_eval.n as usize) * 4 + (self.sprite_eval.m as usize);
-                self.sprite_eval.latch = self.oam_data[oam_offset];
+                let oam_offset = self.sprite_eval.n as usize * 4 + self.sprite_eval.m as usize;
+                self.sprite_eval.latch =
+                    self.oam_data[(self.oam_addr as usize + oam_offset) & 0xFF];
             }
         } else {
             // Even cycle: potentially write to secondary OAM
@@ -535,13 +328,13 @@ impl PPU {
                 return;
             }
 
-            if self.secondary_oam_count < 8 {
+            let next_scanline = (self.scanline + 1) % 262;
+            if self.nsoam < 8 {
                 // Normal evaluation
                 if self.sprite_eval.m == 0 {
                     // Check if sprite is on next scanline
                     let sprite_y = (self.sprite_eval.latch as u16).wrapping_add(1);
                     let sprite_size = self.ctrl.sprite_size() as u16;
-                    let next_scanline = self.scanline + 1;
 
                     // Sprite Y is the line BEFORE the sprite appears
                     // So sprite is visible if: Y+1 <= scanline < Y+1+height
@@ -550,9 +343,9 @@ impl PPU {
                         && next_scanline < sprite_y.wrapping_add(sprite_size)
                     {
                         // Sprite is in range, start copying
-                        let idx = self.secondary_oam_count as usize;
-                        self.secondary_oam[idx].y = self.sprite_eval.latch;
-                        self.secondary_oam[idx].sprite_index = self.sprite_eval.n;
+                        let idx = self.nsoam as usize;
+                        self.soam[idx].y = self.sprite_eval.latch;
+                        self.soam[idx].sprite_idx = self.sprite_eval.n;
                         self.sprite_eval.m = 1;
                     } else {
                         // Sprite not in range, move to next sprite
@@ -560,18 +353,18 @@ impl PPU {
                     }
                 } else {
                     // Copy remaining bytes
-                    let idx = self.secondary_oam_count as usize;
+                    let idx = self.nsoam as usize;
                     match self.sprite_eval.m {
-                        1 => self.secondary_oam[idx].tile = self.sprite_eval.latch,
-                        2 => self.secondary_oam[idx].attr = self.sprite_eval.latch,
+                        1 => self.soam[idx].tile = self.sprite_eval.latch,
+                        2 => self.soam[idx].attr = self.sprite_eval.latch,
                         3 => {
-                            self.secondary_oam[idx].x = self.sprite_eval.latch;
-                            self.secondary_oam_count += 1;
+                            self.soam[idx].x = self.sprite_eval.latch;
+                            self.nsoam += 1;
                             self.sprite_eval.n += 1;
                             self.sprite_eval.m = 0;
                             return;
                         }
-                        _ => {}
+                        _ => unreachable!(),
                     }
                     self.sprite_eval.m += 1;
                 }
@@ -581,7 +374,6 @@ impl PPU {
                 if self.sprite_eval.m == 0 {
                     let sprite_y = (self.sprite_eval.latch as u16).wrapping_add(1);
                     let sprite_size = self.ctrl.sprite_size() as u16;
-                    let next_scanline = self.scanline + 1;
 
                     if next_scanline >= sprite_y
                         && next_scanline < sprite_y.wrapping_add(sprite_size)
@@ -617,7 +409,7 @@ impl PPU {
 
         // At cycle 0 of first sprite, copy secondary OAM data to render state
         if self.cycles == 258 {
-            self.sprite_render_count = self.secondary_oam_count;
+            self.nsprite_render = self.nsoam;
             for i in 0..8 {
                 self.sprite_render[i] = SpriteRenderData::default();
             }
@@ -625,7 +417,7 @@ impl PPU {
 
         // Pattern fetches happen at cycles 4 and 6 within each sprite's window
         if sprite_idx < 8 {
-            let next_scanline = self.scanline + 1;
+            let next_scanline = (self.scanline + 1) % 262;
             match cycle_in_sprite {
                 0 | 2 => {
                     // Garbage NT fetches - these still access the bus
@@ -635,15 +427,14 @@ impl PPU {
                 }
                 4 => {
                     // Fetch pattern low
-                    if (sprite_idx as u8) < self.secondary_oam_count {
-                        let entry = &self.secondary_oam[sprite_idx];
-                        let addr =
-                            self.calc_sprite_pattern_addr_for_scanline(entry, true, next_scanline);
+                    if (sprite_idx as u8) < self.nsoam {
+                        let entry = &self.soam[sprite_idx];
+                        let addr = self.calc_sprite_pattern_addr(entry, true, next_scanline);
                         let pattern = rom.read_chr(addr);
                         self.sprite_render[sprite_idx].pattern_lo = pattern;
                         self.sprite_render[sprite_idx].attr = entry.attr;
-                        self.sprite_render[sprite_idx].x_counter = entry.x;
-                        self.sprite_render[sprite_idx].sprite_index = entry.sprite_index;
+                        self.sprite_render[sprite_idx].nx = entry.x;
+                        self.sprite_render[sprite_idx].sprite_idx = entry.sprite_idx;
                     } else {
                         // Dummy fetch for tile 0xFF
                         let addr = self.ctrl.sprt_pattern_addr() + 0xFF * 16;
@@ -652,10 +443,9 @@ impl PPU {
                 }
                 6 => {
                     // Fetch pattern high
-                    if (sprite_idx as u8) < self.secondary_oam_count {
-                        let entry = &self.secondary_oam[sprite_idx];
-                        let addr =
-                            self.calc_sprite_pattern_addr_for_scanline(entry, false, next_scanline);
+                    if (sprite_idx as u8) < self.nsoam {
+                        let entry = &self.soam[sprite_idx];
+                        let addr = self.calc_sprite_pattern_addr(entry, false, next_scanline);
                         let pattern = rom.read_chr(addr);
                         self.sprite_render[sprite_idx].pattern_hi = pattern;
                     } else {
@@ -713,7 +503,7 @@ impl PPU {
                 let v = self.internal.get_v();
                 let addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
                 let shift = ((v >> 4) & 4) | (v & 2);
-                self.bg_nt_attrib = (self.peek_vram(rom, addr) >> shift) & 3;
+                self.bg_nt_attr = (self.peek_vram(rom, addr) >> shift) & 3;
             }
             4 => {
                 // Fetch Pattern Table Low
@@ -741,20 +531,20 @@ impl PPU {
     }
 
     fn load_bg_shifters(&mut self) {
-        self.bg_pattern_lo = (self.bg_pattern_lo & 0xFF00) | self.bg_nt_lsb as u16;
-        self.bg_pattern_hi = (self.bg_pattern_hi & 0xFF00) | self.bg_nt_msb as u16;
+        self.bg_patt.0 = (self.bg_patt.0 & 0xFF00) | self.bg_nt_lsb as u16;
+        self.bg_patt.1 = (self.bg_patt.1 & 0xFF00) | self.bg_nt_msb as u16;
 
-        let attr = self.bg_nt_attrib;
-        self.bg_attrib_lo = (self.bg_attrib_lo & 0xFF00) | (if (attr & 1) > 0 { 0xFF } else { 0 });
-        self.bg_attrib_hi = (self.bg_attrib_hi & 0xFF00) | (if (attr & 2) > 0 { 0xFF } else { 0 });
+        let attr = self.bg_nt_attr;
+        self.bg_attr.0 = (self.bg_attr.0 & 0xFF00) | (if (attr & 1) > 0 { 0xFF } else { 0 });
+        self.bg_attr.1 = (self.bg_attr.1 & 0xFF00) | (if (attr & 2) > 0 { 0xFF } else { 0 });
     }
 
     fn update_shifters(&mut self) {
         if self.mask.show_background() {
-            self.bg_pattern_lo <<= 1;
-            self.bg_pattern_hi <<= 1;
-            self.bg_attrib_lo <<= 1;
-            self.bg_attrib_hi <<= 1;
+            self.bg_patt.0 <<= 1;
+            self.bg_patt.1 <<= 1;
+            self.bg_attr.0 <<= 1;
+            self.bg_attr.1 <<= 1;
         }
     }
 
@@ -766,12 +556,12 @@ impl PPU {
         if self.mask.show_background() {
             let bit_mux = 0x8000 >> self.internal.fine_x();
 
-            let p0 = (self.bg_pattern_lo & bit_mux) > 0;
-            let p1 = (self.bg_pattern_hi & bit_mux) > 0;
+            let p0 = (self.bg_patt.0 & bit_mux) > 0;
+            let p1 = (self.bg_patt.1 & bit_mux) > 0;
             bg_pixel = (if p1 { 2 } else { 0 }) | (if p0 { 1 } else { 0 });
 
-            let pal0 = (self.bg_attrib_lo & bit_mux) > 0;
-            let pal1 = (self.bg_attrib_hi & bit_mux) > 0;
+            let pal0 = (self.bg_attr.0 & bit_mux) > 0;
+            let pal1 = (self.bg_attr.1 & bit_mux) > 0;
             bg_palette = (if pal1 { 2 } else { 0 }) | (if pal0 { 1 } else { 0 });
         }
 
@@ -838,9 +628,9 @@ impl PPU {
 
     fn get_sprite_pixel(&self, x: usize) -> (u8, u8, bool, bool) {
         // Check all sprites in priority order (lower index = higher priority)
-        for i in 0..self.sprite_render_count as usize {
+        for i in 0..self.nsprite_render as usize {
             let sprite = &self.sprite_render[i];
-            let sprite_x = sprite.x_counter as usize;
+            let sprite_x = sprite.nx as usize;
 
             // Check if pixel is within sprite's horizontal range
             if x >= sprite_x && x < sprite_x + 8 {
@@ -861,7 +651,7 @@ impl PPU {
                 if color != 0 {
                     let palette = sprite.attr & 0x03;
                     let priority = (sprite.attr >> 5) & 1 == 1; // 1 = behind BG
-                    let is_sprite_zero = sprite.sprite_index == 0;
+                    let is_sprite_zero = sprite.sprite_idx == 0;
 
                     return (color, palette, priority, is_sprite_zero);
                 }
@@ -1059,23 +849,23 @@ impl PPU {
     }
 
     fn mirror_vram_addr(&self, addr: u16, mirroring: Mirroring) -> u16 {
-        let vram_index = (addr & 0x2FFF) - 0x2000;
-        let nametable = vram_index / 0x0400;
+        let vram_idx = (addr & 0x2FFF) - 0x2000;
+        let nametable = vram_idx / 0x0400;
 
         match mirroring {
             Mirroring::Horizontal => match nametable {
-                0 | 1 => vram_index & 0x03FF,
-                2 | 3 => (vram_index & 0x03FF) + 0x0400,
+                0 | 1 => vram_idx & 0x03FF,
+                2 | 3 => (vram_idx & 0x03FF) + 0x0400,
                 _ => unreachable!(),
             },
             Mirroring::Vertical => match nametable {
-                0 | 2 => vram_index & 0x03FF,
-                1 | 3 => (vram_index & 0x03FF) + 0x0400,
+                0 | 2 => vram_idx & 0x03FF,
+                1 | 3 => (vram_idx & 0x03FF) + 0x0400,
                 _ => unreachable!(),
             },
-            Mirroring::SingleScreenLower => vram_index & 0x03FF,
-            Mirroring::SingleScreenUpper => (vram_index & 0x03FF) + 0x0400,
-            Mirroring::FourScreen => vram_index,
+            Mirroring::SingleScreenLower => vram_idx & 0x03FF,
+            Mirroring::SingleScreenUpper => (vram_idx & 0x03FF) + 0x0400,
+            Mirroring::FourScreen => vram_idx,
         }
     }
 

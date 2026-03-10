@@ -5,7 +5,7 @@ A NES emu in Rust
 ## Features
 
 - Implements full CPU instruction emulation.
-- Passing 100 tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
+- Passing 104 tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
 - Support iNES mapper 0-4, 7
 - Accurate PPU VBLANK timing & NMI control
 - Plays Battletoads

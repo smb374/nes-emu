@@ -60,12 +60,14 @@ pub struct Bus<'call> {
 
     cpu_writing: bool,
     rdy: bool,
+    irq_line: bool,
 
     cpu_bus: u8,
     ppu_bus: u8,
     cycles: usize,
     cycles_acc: usize,
     joypad1: Joypad,
+    j1_data: Option<u8>,
     joypad2: Joypad,
     cb: Box<dyn FnMut(&PPU, &mut Joypad) -> bool + 'call>,
 
@@ -96,6 +98,7 @@ impl<'call> Bus<'call> {
 
             cpu_writing: false,
             rdy: true,
+            irq_line: false,
 
             cpu_bus: 0,
             ppu_bus: 0,
@@ -104,6 +107,7 @@ impl<'call> Bus<'call> {
             cycles: 0,
             cycles_acc: 0,
             cb: Box::new(f),
+            j1_data: None,
 
             oam_dma_state: DMAState::default(),
             oam_dma_addr: 0,
@@ -116,12 +120,20 @@ impl<'call> Bus<'call> {
         }
     }
 
-    pub fn tick(&mut self) -> (bool, bool) {
+    pub fn tick(&mut self) -> bool {
         self.cycles += 1;
+        let pb = self.apu.put_cycle;
         self.apu.tick();
-
         if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
             self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
+        }
+        let pa = self.apu.put_cycle;
+
+        if !pb && pa {
+            // get -> put
+            if let Some(dat) = self.j1_data.take() {
+                self.joypad1.write(dat);
+            }
         }
         self.handle_dma();
         let frame_before = self.ppu.frames;
@@ -131,20 +143,27 @@ impl<'call> Bus<'call> {
         if frame_before != frame_after {
             self.ppu_bus = 0;
             if (self.cb)(&self.ppu, &mut self.joypad1) {
-                return (false, true);
+                return true;
             }
         }
 
         let mapper_irq = self.rom.irq_sig;
         self.rom.irq_sig = false;
         let apu_irq = self.apu.irq_sig;
-        self.apu.irq_sig = false;
+        self.apu.irq_sig = self.apu.dmc.irq_flag;
 
-        (mapper_irq || apu_irq, false)
+        self.irq_line |= mapper_irq || apu_irq;
+        false
     }
 
     pub fn poll_nmi_status(&mut self) -> Option<u8> {
         self.ppu.nmi_interrupt.take()
+    }
+
+    pub fn poll_irq_status(&mut self) -> bool {
+        let res = self.irq_line;
+        self.irq_line = self.apu.dmc.irq_flag;
+        res
     }
 
     pub fn save_prg_ram(&self) -> Result<(), String> {
@@ -220,6 +239,11 @@ impl<'call> Bus<'call> {
                         if halt || self.dmc_dma_retry {
                             self.rdy = false;
                             self.dmc_dma_state = DMAState::DMCDummy;
+                            log::info!(
+                                "DMC DMA: Pending -> Dummy PUT:{} CYC:{}",
+                                self.apu.put_cycle,
+                                self.cycles
+                            );
                         } else {
                             self.dmc_dma_retry = true;
                         }
@@ -230,16 +254,39 @@ impl<'call> Bus<'call> {
                 DMAState::DMCDummy => {
                     if self.apu.put_cycle {
                         self.dmc_dma_state = DMAState::Transfer;
+                        log::info!(
+                            "DMC DMA: Dummy -> Transfer PUT:{} CYC:{}",
+                            self.apu.put_cycle,
+                            self.cycles
+                        );
                     } else {
                         self.dmc_dma_state = DMAState::Alignment;
+                        log::info!(
+                            "DMC DMA: Dummy -> Alignment PUT:{} CYC:{}",
+                            self.apu.put_cycle,
+                            self.cycles
+                        );
                     }
                 }
                 DMAState::Alignment => {
                     self.dmc_dma_state = DMAState::Transfer;
+                    log::info!(
+                        "DMC DMA: Alignment -> Transfer PUT:{} CYC:{}",
+                        self.apu.put_cycle,
+                        self.cycles
+                    );
                 }
                 DMAState::Transfer => {
                     let data = self.read_u8(self.dmc_dma_addr);
                     self.apu.dmc.update_sample(data);
+                    log::info!(
+                        "DMC DMA: Transfer ${:04X} => ${:02X} bus=${:02X} PUT:{} CYC:{}",
+                        self.dmc_dma_addr,
+                        data,
+                        self.cpu_bus,
+                        self.apu.put_cycle,
+                        self.cycles
+                    );
                     self.dmc_dma_state = DMAState::Idle;
                     if self.oam_dma_state == DMAState::Pending {
                         self.oam_dma_state = DMAState::Alignment;
@@ -451,7 +498,9 @@ impl<'call> Mem for Bus<'call> {
 
             0x4015 => self.apu.write_status(data),
 
-            0x4016 => self.joypad1.write(data),
+            0x4016 => {
+                self.j1_data = Some(data);
+            }
 
             0x4017 => self.apu.write_frame_counter(data),
 
