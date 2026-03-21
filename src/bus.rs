@@ -1,7 +1,7 @@
 use cpal::Device;
 
 use crate::{
-    Mem,
+    CPU_CYCLE, Mem,
     apu::{APU, TimedChannel},
     cartridge::Rom,
     joypad::Joypad,
@@ -51,6 +51,12 @@ impl Default for DMAState {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct IOBus {
+    addr: u16,
+    data: u8,
+}
+
 #[allow(unused)]
 pub struct Bus<'call> {
     vram: [u8; 0x800],
@@ -64,8 +70,6 @@ pub struct Bus<'call> {
 
     cpu_bus: u8,
     ppu_bus: u8,
-    cycles: usize,
-    cycles_acc: usize,
     joypad1: Joypad,
     j1_data: Option<u8>,
     joypad2: Joypad,
@@ -104,8 +108,6 @@ impl<'call> Bus<'call> {
             ppu_bus: 0,
             joypad1: Joypad::new(),
             joypad2: Joypad::new(),
-            cycles: 0,
-            cycles_acc: 0,
             cb: Box::new(f),
             j1_data: None,
 
@@ -121,7 +123,6 @@ impl<'call> Bus<'call> {
     }
 
     pub fn tick(&mut self) -> bool {
-        self.cycles += 1;
         let pb = self.apu.put_cycle;
         self.apu.tick();
         if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
@@ -231,61 +232,43 @@ impl<'call> Bus<'call> {
                 DMAState::Idle => {}
                 DMAState::Pending => {
                     if !self.cpu_writing {
-                        let halt = if self.dmc_dma_reload {
-                            self.apu.put_cycle
-                        } else {
-                            !self.apu.put_cycle
-                        };
-                        if halt || self.dmc_dma_retry {
-                            self.rdy = false;
-                            self.dmc_dma_state = DMAState::DMCDummy;
-                            log::info!(
-                                "DMC DMA: Pending -> Dummy PUT:{} CYC:{}",
-                                self.apu.put_cycle,
-                                self.cycles
-                            );
-                        } else {
-                            self.dmc_dma_retry = true;
-                        }
-                    } else {
-                        self.dmc_dma_retry = true;
+                        self.rdy = false;
+                        self.dmc_dma_state = DMAState::DMCDummy;
+                        log::info!(
+                            "[DMC DMA] Pending -> Dummy PUT:{} CYC:{}",
+                            self.apu.put_cycle,
+                            CPU_CYCLE.get()
+                        );
                     }
                 }
                 DMAState::DMCDummy => {
-                    if self.apu.put_cycle {
-                        self.dmc_dma_state = DMAState::Transfer;
-                        log::info!(
-                            "DMC DMA: Dummy -> Transfer PUT:{} CYC:{}",
-                            self.apu.put_cycle,
-                            self.cycles
-                        );
-                    } else {
+                    if !self.apu.put_cycle {
                         self.dmc_dma_state = DMAState::Alignment;
                         log::info!(
-                            "DMC DMA: Dummy -> Alignment PUT:{} CYC:{}",
+                            "[DMC DMA] Dummy -> Alignment PUT:{} CYC:{}",
                             self.apu.put_cycle,
-                            self.cycles
+                            CPU_CYCLE.get()
                         );
                     }
                 }
                 DMAState::Alignment => {
                     self.dmc_dma_state = DMAState::Transfer;
                     log::info!(
-                        "DMC DMA: Alignment -> Transfer PUT:{} CYC:{}",
+                        "[DMC DMA] Alignment -> Transfer PUT:{} CYC:{}",
                         self.apu.put_cycle,
-                        self.cycles
+                        CPU_CYCLE.get()
                     );
                 }
                 DMAState::Transfer => {
                     let data = self.read_u8(self.dmc_dma_addr);
                     self.apu.dmc.update_sample(data);
                     log::info!(
-                        "DMC DMA: Transfer ${:04X} => ${:02X} bus=${:02X} PUT:{} CYC:{}",
+                        "[DMC DMA] Transfer ${:04X} => ${:02X} bus=${:02X} PUT:{} CYC:{}",
                         self.dmc_dma_addr,
                         data,
                         self.cpu_bus,
                         self.apu.put_cycle,
-                        self.cycles
+                        CPU_CYCLE.get()
                     );
                     self.dmc_dma_state = DMAState::Idle;
                     if self.oam_dma_state == DMAState::Pending {

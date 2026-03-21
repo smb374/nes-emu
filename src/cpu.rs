@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicBool;
 use bitflags::bitflags;
 
 use crate::{
-    Mem,
+    CPU_CYCLE, Mem,
     bus::Bus,
     opcodes::{
         AddressMode::{self, *},
@@ -69,7 +69,6 @@ pub struct CPU<'a> {
     pub bus: Bus<'a>,
     irq_sig: bool,
     exit_sig: bool,
-    pub cycles: usize,
     nmi_delay: Option<bool>,
     nmi_latch: Option<u8>,
     addr: Option<u16>,
@@ -107,7 +106,6 @@ impl<'a> CPU<'a> {
             bus,
             irq_sig: false,
             exit_sig: false,
-            cycles: 0,
             nmi_delay: None,
             nmi_latch: None,
             addr: None,
@@ -120,7 +118,7 @@ impl<'a> CPU<'a> {
         self.reg_y = 0;
         self.sp = STACK_RESET;
         self.status = CpuFlags::BREAK2 | CpuFlags::INTR_DISABLE;
-        self.cycles = 0;
+        CPU_CYCLE.set(0);
 
         for _ in 0..5 {
             self.tick();
@@ -146,7 +144,7 @@ impl<'a> CPU<'a> {
             }
 
             cb(self);
-
+            let cyc = CPU_CYCLE.get();
             let opcode = self.read_u8(self.pc);
             self.pc += 1;
             let pc_cache = self.pc;
@@ -155,24 +153,26 @@ impl<'a> CPU<'a> {
                 self.run_op(op);
                 if let Some(addr) = self.addr.take() {
                     log::trace!(
-                        "{:04X} {} ${:04X} A:{:02X} X:{:02X} Y:{:02X} F:{:02X}",
+                        "{:04X} {} ${:04X} A:{:02X} X:{:02X} Y:{:02X} F:{:02X} CYC:{}",
                         pc_cache - 1,
                         op.mnemonic,
                         addr,
                         self.reg_a,
                         self.reg_x,
                         self.reg_y,
-                        self.status.bits()
+                        self.status.bits(),
+                        cyc
                     );
                 } else {
                     log::trace!(
-                        "{:04X} {}       A:{:02X} X:{:02X} Y:{:02X} F:{:02X}",
+                        "{:04X} {}       A:{:02X} X:{:02X} Y:{:02X} F:{:02X} CYC:{}",
                         pc_cache - 1,
                         op.mnemonic,
                         self.reg_a,
                         self.reg_x,
                         self.reg_y,
-                        self.status.bits()
+                        self.status.bits(),
+                        cyc
                     );
                 }
                 if self.exit_sig {
@@ -215,7 +215,7 @@ impl<'a> CPU<'a> {
 
     fn tick(&mut self) {
         self.exit_sig |= self.bus.tick();
-        self.cycles += 1;
+        CPU_CYCLE.set(CPU_CYCLE.get() + 1);
         if self.nmi_latch.is_none() {
             self.nmi_latch = self.bus.poll_nmi_status();
         }
@@ -307,8 +307,7 @@ impl<'a> CPU<'a> {
         let offset = self.read_u8(self.pc) as i8 as i16;
         self.pc = self.pc.wrapping_add(1);
         if condition {
-            self.bus.read_u8(self.pc);
-            self.tick();
+            self.read_u8(self.pc);
 
             let old_pc = self.pc;
             let new_pc = self.pc.wrapping_add_signed(offset);
@@ -317,8 +316,7 @@ impl<'a> CPU<'a> {
             if Self::page_crossed(old_pc, new_pc) {
                 let wrong_pc = (old_pc & 0xFF00) | (new_pc & 0x00FF);
                 self.poll_intr();
-                self.bus.read_u8(wrong_pc);
-                self.tick();
+                self.read_u8(wrong_pc);
             }
             self.pc = new_pc;
         }

@@ -3,10 +3,7 @@ mod mix_table;
 pub mod registers;
 mod units;
 
-use std::{
-    sync::mpsc::{self, SyncSender, TryRecvError},
-    time::SystemTime,
-};
+use std::sync::mpsc::{self, SyncSender, TryRecvError};
 
 pub use channel::TimedChannel;
 use cpal::{
@@ -14,7 +11,7 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 
-use crate::apu::units::filter::Filter;
+use crate::{CPU_CYCLE, apu::units::filter::Filter};
 
 use self::{
     channel::{dmc::DMCChannel, noise::NoiseChannel, pulse::PulseChannel, triag::TriangleChannel},
@@ -80,17 +77,12 @@ impl APU {
             )
             .expect("Failed to create output stream");
         stream.play().expect("Failed to start stream");
-        let time_base = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .ok()
-            .unwrap_or_default()
-            .as_millis();
 
         Self {
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
             irq_sig: false,
-            put_cycle: (time_base & 1) == 1,
+            put_cycle: true,
             pulse1: PulseChannel::new(false),
             pulse2: PulseChannel::new(true),
             triag: TriangleChannel::new(),
@@ -112,8 +104,6 @@ impl APU {
     }
 
     pub fn tick(&mut self) {
-        self.cycles += 1;
-
         if self.clear_irq_flag && !self.put_cycle {
             self.clear_irq_flag = false;
             self.status.remove(APUStatus::FRAME_INTERRUPT);
@@ -123,12 +113,14 @@ impl APU {
             self.status.remove(APUStatus::FRAME_INTERRUPT);
         }
         self.triag.clock_timer();
-        self.dmc.clock_timer();
 
-        if self.put_cycle {
+        if self.cycles & 1 == 0 {
             self.pulse1.clock_timer();
             self.pulse2.clock_timer();
             self.noise.clock_timer();
+            self.noise.clock_timer();
+            self.dmc.clock_timer();
+            self.dmc.clock_timer();
         }
 
         self.generate_samples();
@@ -142,21 +134,26 @@ impl APU {
         if !self.put_cycle {
             self.fcycles += 1;
         }
-        if self.dmc_dma_schedule.is_some_and(|c| c == self.fcycles) {
-            self.dmc.dma_sample = true;
-            self.dmc.dma_reload = false;
-            self.dmc_dma_schedule = None;
+        if let Some(mut delay) = self.dmc_dma_schedule.take() {
+            delay -= 1;
+            if delay == 0 {
+                log::info!("[APU] Request load DMA, CYC:{}", CPU_CYCLE.get());
+                self.dmc.dma_sample = true;
+                self.dmc.dma_reload = false;
+            } else {
+                self.dmc_dma_schedule = Some(delay)
+            }
         }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
-            if delay != 0 {
-                delay -= 1;
-            }
+            delay -= 1;
             if delay == 0 {
                 self.apply_frame_counter(val);
             } else {
                 self.pending_frame_counter = Some((val, delay));
             }
         }
+
+        self.cycles += 1;
     }
 
     fn step_frame_sequencer(&mut self) {
@@ -310,8 +307,8 @@ impl APU {
 
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
-            if self.dmc.sample_buffer_empty {
-                self.dmc_dma_schedule = Some(self.fcycles + 2);
+            if self.dmc.sample_buffer.is_none() {
+                self.dmc_dma_schedule = Some(if self.put_cycle { 3 } else { 4 });
             }
             self.dmc.start();
         } else {
