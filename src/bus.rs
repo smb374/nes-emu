@@ -249,6 +249,7 @@ impl<'call> Bus<'call> {
                             CPU_CYCLE.get()
                         );
                     } else {
+                        log::info!("[DMC DMA] Retry");
                         self.dmc_dma_retry = true;
                     }
                 }

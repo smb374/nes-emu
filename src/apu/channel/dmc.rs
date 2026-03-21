@@ -132,12 +132,11 @@ impl DMCChannel {
             );
             self.clock_output_unit();
             // Memory reader - request DMA if buffer is empty and we have bytes to fetch
-            log::trace!(
-                "[DMC] sample_buffer = {:?}, bytes_remaining = {}",
-                self.sample_buffer,
-                self.bytes_remaining
-            );
-            if self.sample_buffer.is_none() && self.bytes_remaining > 0 && !self.dma_sample {
+            if self.sample_buffer.is_none()
+                && self.bytes_remaining > 0
+                && self.load_dma_schedule.is_none()
+                && !self.dma_sample
+            {
                 log::info!(
                     "[DMC] Request reload DMA, bytes_remaining = {} CYC:{}",
                     self.bytes_remaining,
@@ -187,10 +186,9 @@ impl DMCChannel {
                     self.output_level -= 2;
                 }
             }
-
-            // Shift the register right
-            self.shift_register >>= 1;
         }
+        // Shift the register right
+        self.shift_register >>= 1;
 
         // Decrement bits remaining FIRST
         self.bits_remaining -= 1;

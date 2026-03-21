@@ -81,7 +81,7 @@ impl APU {
             status: APUStatus::default(),
             frame_counter: FrameCounter::default(),
             irq_sig: false,
-            put_cycle: true,
+            put_cycle: rand::random_bool(0.5),
             pulse1: PulseChannel::new(false),
             pulse2: PulseChannel::new(true),
             triag: TriangleChannel::new(),
@@ -112,7 +112,7 @@ impl APU {
         }
         self.triag.clock_timer();
 
-        if self.cycles & 1 == 0 {
+        if self.put_cycle {
             self.pulse1.clock_timer();
             self.pulse2.clock_timer();
             self.noise.clock_timer();
