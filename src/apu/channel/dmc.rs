@@ -43,6 +43,7 @@ pub struct DMCChannel {
 
     pub dma_sample: bool,
     pub dma_reload: bool,
+    pub load_dma_schedule: Option<u8>,
 }
 
 impl DMCChannel {
@@ -65,6 +66,7 @@ impl DMCChannel {
             irq_flag: false,
             dma_sample: false,
             dma_reload: false,
+            load_dma_schedule: None,
         }
     }
 
@@ -100,11 +102,13 @@ impl DMCChannel {
     /// Start playback
     pub fn start(&mut self) {
         if self.bytes_remaining == 0 {
+            log::info!("[DMC] Start CYC:{}", CPU_CYCLE.get());
             self.restart_sample();
         }
     }
 
     pub fn stop(&mut self) {
+        log::info!("[DMC] Stop CYC:{}", CPU_CYCLE.get());
         self.bytes_remaining = 0;
     }
 
@@ -116,7 +120,9 @@ impl DMCChannel {
 
     /// Clock the timer
     pub fn clock_timer(&mut self) {
-        self.timer_counter = self.timer_counter.saturating_sub(1);
+        if self.timer_counter > 0 {
+            self.timer_counter -= 1;
+        }
         if self.timer_counter == 0 {
             self.timer_counter = self.timer_period;
             log::info!(
@@ -125,16 +131,21 @@ impl DMCChannel {
                 CPU_CYCLE.get()
             );
             self.clock_output_unit();
-        }
-        // Memory reader - request DMA if buffer is empty and we have bytes to fetch
-        if self.sample_buffer.is_none() && self.bytes_remaining > 0 && !self.dma_sample {
-            log::info!(
-                "[DMC] Request reload DMA, bytes_remaining = {} CYC:{}",
-                self.bytes_remaining,
-                CPU_CYCLE.get()
+            // Memory reader - request DMA if buffer is empty and we have bytes to fetch
+            log::trace!(
+                "[DMC] sample_buffer = {:?}, bytes_remaining = {}",
+                self.sample_buffer,
+                self.bytes_remaining
             );
-            self.dma_sample = true;
-            self.dma_reload = true;
+            if self.sample_buffer.is_none() && self.bytes_remaining > 0 && !self.dma_sample {
+                log::info!(
+                    "[DMC] Request reload DMA, bytes_remaining = {} CYC:{}",
+                    self.bytes_remaining,
+                    CPU_CYCLE.get()
+                );
+                self.dma_sample = true;
+                self.dma_reload = true;
+            }
         }
     }
 
@@ -151,12 +162,12 @@ impl DMCChannel {
 
         if self.bytes_remaining > 0 {
             self.bytes_remaining -= 1;
-            if self.bytes_remaining == 0 {
-                if self.loop_flag {
-                    self.restart_sample();
-                } else if self.irq_enabled {
-                    self.irq_flag = true;
-                }
+        }
+        if self.bytes_remaining == 0 {
+            if self.loop_flag {
+                self.restart_sample();
+            } else if self.irq_enabled {
+                self.irq_flag = true;
             }
         }
     }

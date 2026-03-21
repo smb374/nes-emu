@@ -5,7 +5,7 @@ A NES emu in Rust
 ## Features
 
 - Implements full CPU instruction emulation.
-- Passing 104 tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
+- Passing 110 tests out of 136 tests from [100thCoin/AccuracyCoin](https://github.com/100thCoin/AccuracyCoin)
 - Support iNES mapper 0-4, 7
 - Accurate PPU VBLANK timing & NMI control
 - Plays Battletoads
@@ -33,7 +33,7 @@ To start the emulator and load the ROM.
 Currently only supports single controller with static binding:
 
 | Key        | Controller |
-|------------|------------|
+| ---------- | ---------- |
 | Z          | A          |
 | X          | B          |
 | Return     | Start      |
@@ -56,10 +56,10 @@ AccuracyCoin run all result screen:
 ## Roadmap
 
 - [ ] ~~Improve DMA accuracy by implementing RDY line control, get/put cycles, and
-  cycle alignment rather than current hard-coded stuff~~
-  Implementation done, but not passing tests.
+      cycle alignment rather than current hard-coded stuff~~
+      Implementation done, but not passing tests.
 - [ ] Implement correct instruction behavior for SHA, SHS, SHX, SHY to
-  account for RDY line assertion when DMA occurrence
+      account for RDY line assertion when DMA occurrence
   - Unknown requirements for this.
 - [ ] Improve NMI overlapping behavior
 - [ ] Improve PPU accuracy

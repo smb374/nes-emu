@@ -32,7 +32,6 @@ pub struct APU {
     pub triag: TriangleChannel,
     pub noise: NoiseChannel,
     pub dmc: DMCChannel,
-    dmc_dma_schedule: Option<usize>,
     clear_irq_flag: bool,
 
     cycles: usize,
@@ -88,7 +87,6 @@ impl APU {
             triag: TriangleChannel::new(),
             noise: NoiseChannel::new(),
             dmc: DMCChannel::default(),
-            dmc_dma_schedule: None,
             clear_irq_flag: false,
 
             cycles: 0,
@@ -134,14 +132,14 @@ impl APU {
         if !self.put_cycle {
             self.fcycles += 1;
         }
-        if let Some(mut delay) = self.dmc_dma_schedule.take() {
+        if let Some(mut delay) = self.dmc.load_dma_schedule.take() {
             delay -= 1;
             if delay == 0 {
                 log::info!("[APU] Request load DMA, CYC:{}", CPU_CYCLE.get());
                 self.dmc.dma_sample = true;
                 self.dmc.dma_reload = false;
             } else {
-                self.dmc_dma_schedule = Some(delay)
+                self.dmc.load_dma_schedule = Some(delay)
             }
         }
         if let Some((val, mut delay)) = self.pending_frame_counter.take() {
@@ -308,7 +306,8 @@ impl APU {
         // DMC control
         if self.status.contains(APUStatus::DMC_CHANNEL) {
             if self.dmc.sample_buffer.is_none() {
-                self.dmc_dma_schedule = Some(if self.put_cycle { 3 } else { 4 });
+                log::info!("[APU] Schedule load DMA CYC:{}", CPU_CYCLE.get());
+                self.dmc.load_dma_schedule = Some(if self.put_cycle { 3 } else { 4 });
             }
             self.dmc.start();
         } else {
