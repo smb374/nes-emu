@@ -192,6 +192,10 @@ impl<'call> Bus<'call> {
         self.oam_dma_state == DMAState::Transfer || self.dmc_dma_state == DMAState::Transfer
     }
 
+    pub fn is_put(&self) -> bool {
+        self.apu.put_cycle
+    }
+
     fn oam_dma_req(&mut self, page: u8) {
         self.ppu.oam_addr = 0;
         self.oam_dma_state = DMAState::Pending;
