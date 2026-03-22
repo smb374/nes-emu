@@ -150,6 +150,7 @@ fn main() {
             if now < next_frame_target {
                 std::thread::sleep(next_frame_target - now);
             } else {
+                log::warn!("Lagged for {:?}", now - next_frame_target);
                 if now - next_frame_target > FRAME_DURATION * 3 {
                     next_frame_target = now;
                 }

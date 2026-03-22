@@ -1,3 +1,5 @@
+use crate::CPU_CYCLE;
+
 #[rustfmt::skip]
 const RATE_TABLE: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214,
@@ -25,8 +27,7 @@ pub struct DMCChannel {
     timer_counter: u16,
 
     // Sample buffer
-    sample_buffer: u8,
-    pub sample_buffer_empty: bool,
+    pub sample_buffer: Option<u8>,
 
     // Shift register
     shift_register: u8,
@@ -42,6 +43,7 @@ pub struct DMCChannel {
 
     pub dma_sample: bool,
     pub dma_reload: bool,
+    pub load_dma_schedule: Option<u8>,
 }
 
 impl DMCChannel {
@@ -55,8 +57,7 @@ impl DMCChannel {
             sample_length: 1,
             timer_period: RATE_TABLE[0],
             timer_counter: RATE_TABLE[0],
-            sample_buffer: 0,
-            sample_buffer_empty: true,
+            sample_buffer: None,
             shift_register: 0,
             bits_remaining: 0,
             silence_flag: true,
@@ -65,6 +66,7 @@ impl DMCChannel {
             irq_flag: false,
             dma_sample: false,
             dma_reload: false,
+            load_dma_schedule: None,
         }
     }
 
@@ -100,11 +102,13 @@ impl DMCChannel {
     /// Start playback
     pub fn start(&mut self) {
         if self.bytes_remaining == 0 {
+            log::info!("[DMC] Start CYC:{}", CPU_CYCLE.get());
             self.restart_sample();
         }
     }
 
     pub fn stop(&mut self) {
+        log::info!("[DMC] Stop CYC:{}", CPU_CYCLE.get());
         self.bytes_remaining = 0;
     }
 
@@ -116,35 +120,48 @@ impl DMCChannel {
 
     /// Clock the timer
     pub fn clock_timer(&mut self) {
-        self.timer_counter -= 1;
+        if self.timer_counter > 0 {
+            self.timer_counter -= 1;
+        }
         if self.timer_counter == 0 {
             self.timer_counter = self.timer_period;
-            self.clock_output_unit();
-        }
-
-        // Memory reader - request DMA if buffer is empty and we have bytes to fetch
-        if self.sample_buffer_empty && self.bytes_remaining > 0 && !self.dma_sample {
             log::info!(
-                "DMC: Request reload DMA, bytes_remaining = {}",
-                self.bytes_remaining
+                "[DMC] reload time counter = {} CYC:{}",
+                self.timer_period,
+                CPU_CYCLE.get()
             );
-            self.dma_sample = true;
-            self.dma_reload = true;
+            self.clock_output_unit();
+            // Memory reader - request DMA if buffer is empty and we have bytes to fetch
+            if self.sample_buffer.is_none()
+                && self.bytes_remaining > 0
+                && self.load_dma_schedule.is_none()
+                && !self.dma_sample
+            {
+                log::info!(
+                    "[DMC] Request reload DMA, bytes_remaining = {} CYC:{}",
+                    self.bytes_remaining,
+                    CPU_CYCLE.get()
+                );
+                self.dma_sample = true;
+                self.dma_reload = true;
+            }
         }
     }
 
     pub fn update_sample(&mut self, data: u8) {
         self.dma_sample = false;
-        self.sample_buffer = data;
-        self.sample_buffer_empty = false;
+        self.sample_buffer = Some(data);
 
         // Advance address with wrapping
-        self.current_address = self.current_address.wrapping_add(1);
-        if self.current_address == 0 {
+        if self.current_address == 0xFFFF {
             self.current_address = 0x8000;
+        } else {
+            self.current_address += 1;
         }
 
-        self.bytes_remaining = self.bytes_remaining.saturating_sub(1);
+        if self.bytes_remaining > 0 {
+            self.bytes_remaining -= 1;
+        }
         if self.bytes_remaining == 0 {
             if self.loop_flag {
                 self.restart_sample();
@@ -169,24 +186,27 @@ impl DMCChannel {
                     self.output_level -= 2;
                 }
             }
-
-            // Shift the register right
-            self.shift_register >>= 1;
         }
+        // Shift the register right
+        self.shift_register >>= 1;
 
         // Decrement bits remaining FIRST
         self.bits_remaining -= 1;
+        log::info!(
+            "[DMC] bits_remaining = {} CYC:{}",
+            self.bits_remaining,
+            CPU_CYCLE.get()
+        );
 
         // When counter reaches 0, load a new byte
         if self.bits_remaining == 0 {
             self.bits_remaining = 8;
 
-            if self.sample_buffer_empty {
-                self.silence_flag = true;
-            } else {
+            if let Some(v) = self.sample_buffer.take() {
                 self.silence_flag = false;
-                self.shift_register = self.sample_buffer;
-                self.sample_buffer_empty = true;
+                self.shift_register = v;
+            } else {
+                self.silence_flag = true;
             }
         }
     }

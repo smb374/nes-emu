@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 pub mod apu;
 pub mod bus;
 pub mod cartridge;
@@ -7,6 +9,10 @@ pub mod mapper;
 pub mod opcodes;
 pub mod ppu;
 pub mod utils;
+
+thread_local! {
+    pub static CPU_CYCLE: Cell<usize> = const {Cell::new(0)};
+}
 
 pub trait Mem {
     fn read_u8(&mut self, addr: u16) -> u8;

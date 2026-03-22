@@ -1,7 +1,7 @@
 use cpal::Device;
 
 use crate::{
-    Mem,
+    CPU_CYCLE, Mem,
     apu::{APU, TimedChannel},
     cartridge::Rom,
     joypad::Joypad,
@@ -51,6 +51,12 @@ impl Default for DMAState {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct IOBus {
+    pub addr: u16,
+    data: u8,
+}
+
 #[allow(unused)]
 pub struct Bus<'call> {
     vram: [u8; 0x800],
@@ -62,10 +68,8 @@ pub struct Bus<'call> {
     rdy: bool,
     irq_line: bool,
 
-    cpu_bus: u8,
+    pub cpu_bus: IOBus,
     ppu_bus: u8,
-    cycles: usize,
-    cycles_acc: usize,
     joypad1: Joypad,
     j1_data: Option<u8>,
     joypad2: Joypad,
@@ -100,12 +104,10 @@ impl<'call> Bus<'call> {
             rdy: true,
             irq_line: false,
 
-            cpu_bus: 0,
+            cpu_bus: IOBus::default(),
             ppu_bus: 0,
             joypad1: Joypad::new(),
             joypad2: Joypad::new(),
-            cycles: 0,
-            cycles_acc: 0,
             cb: Box::new(f),
             j1_data: None,
 
@@ -121,13 +123,22 @@ impl<'call> Bus<'call> {
     }
 
     pub fn tick(&mut self) -> bool {
-        self.cycles += 1;
         let pb = self.apu.put_cycle;
         self.apu.tick();
-        if self.apu.dmc.dma_sample && self.dmc_dma_state == DMAState::Idle {
-            self.dmc_dma_req(self.apu.dmc.current_address, self.apu.dmc.dma_reload);
-        }
         let pa = self.apu.put_cycle;
+        if self.apu.dmc.dma_sample
+            && self.apu.dmc.dma_reload
+            && self.dmc_dma_state == DMAState::Idle
+        {
+            self.dmc_dma_req(self.apu.dmc.current_address, true);
+        }
+        self.handle_dma();
+        if self.apu.dmc.dma_sample
+            && !self.apu.dmc.dma_reload
+            && self.dmc_dma_state == DMAState::Idle
+        {
+            self.dmc_dma_req(self.apu.dmc.current_address, false);
+        }
 
         if !pb && pa {
             // get -> put
@@ -135,7 +146,6 @@ impl<'call> Bus<'call> {
                 self.joypad1.write(dat);
             }
         }
-        self.handle_dma();
         let frame_before = self.ppu.frames;
         self.ppu.tick(&mut self.rom);
         let frame_after = self.ppu.frames;
@@ -180,6 +190,10 @@ impl<'call> Bus<'call> {
 
     pub fn is_dma_xfer(&self) -> bool {
         self.oam_dma_state == DMAState::Transfer || self.dmc_dma_state == DMAState::Transfer
+    }
+
+    pub fn is_put(&self) -> bool {
+        self.apu.put_cycle
     }
 
     fn oam_dma_req(&mut self, page: u8) {
@@ -231,61 +245,53 @@ impl<'call> Bus<'call> {
                 DMAState::Idle => {}
                 DMAState::Pending => {
                     if !self.cpu_writing {
-                        let halt = if self.dmc_dma_reload {
-                            self.apu.put_cycle
-                        } else {
-                            !self.apu.put_cycle
-                        };
-                        if halt || self.dmc_dma_retry {
-                            self.rdy = false;
-                            self.dmc_dma_state = DMAState::DMCDummy;
-                            log::info!(
-                                "DMC DMA: Pending -> Dummy PUT:{} CYC:{}",
-                                self.apu.put_cycle,
-                                self.cycles
-                            );
-                        } else {
-                            self.dmc_dma_retry = true;
-                        }
+                        self.rdy = false;
+                        self.dmc_dma_state = DMAState::DMCDummy;
+                        log::info!(
+                            "[DMC DMA] Pending -> Dummy PUT:{} CYC:{}",
+                            self.apu.put_cycle,
+                            CPU_CYCLE.get()
+                        );
                     } else {
+                        log::info!("[DMC DMA] Retry");
                         self.dmc_dma_retry = true;
                     }
                 }
                 DMAState::DMCDummy => {
-                    if self.apu.put_cycle {
-                        self.dmc_dma_state = DMAState::Transfer;
-                        log::info!(
-                            "DMC DMA: Dummy -> Transfer PUT:{} CYC:{}",
-                            self.apu.put_cycle,
-                            self.cycles
-                        );
-                    } else {
+                    if !self.apu.put_cycle {
                         self.dmc_dma_state = DMAState::Alignment;
                         log::info!(
-                            "DMC DMA: Dummy -> Alignment PUT:{} CYC:{}",
+                            "[DMC DMA] Dummy -> Alignment PUT:{} CYC:{}",
                             self.apu.put_cycle,
-                            self.cycles
+                            CPU_CYCLE.get()
+                        );
+                    } else if self.dmc_dma_retry {
+                        self.dmc_dma_state = DMAState::Transfer;
+                        log::info!(
+                            "[DMC DMA] Dummy -> Transfer PUT:{} CYC:{}",
+                            self.apu.put_cycle,
+                            CPU_CYCLE.get()
                         );
                     }
                 }
                 DMAState::Alignment => {
                     self.dmc_dma_state = DMAState::Transfer;
                     log::info!(
-                        "DMC DMA: Alignment -> Transfer PUT:{} CYC:{}",
+                        "[DMC DMA] Alignment -> Transfer PUT:{} CYC:{}",
                         self.apu.put_cycle,
-                        self.cycles
+                        CPU_CYCLE.get()
                     );
                 }
                 DMAState::Transfer => {
                     let data = self.read_u8(self.dmc_dma_addr);
                     self.apu.dmc.update_sample(data);
                     log::info!(
-                        "DMC DMA: Transfer ${:04X} => ${:02X} bus=${:02X} PUT:{} CYC:{}",
+                        "[DMC DMA] Transfer ${:04X} => ${:02X} bus=${:02X} PUT:{} CYC:{}",
                         self.dmc_dma_addr,
                         data,
-                        self.cpu_bus,
+                        self.cpu_bus.data,
                         self.apu.put_cycle,
-                        self.cycles
+                        CPU_CYCLE.get()
                     );
                     self.dmc_dma_state = DMAState::Idle;
                     if self.oam_dma_state == DMAState::Pending {
@@ -371,59 +377,61 @@ impl<'call> Bus<'call> {
 
 impl<'call> Mem for Bus<'call> {
     fn read_u8(&mut self, addr: u16) -> u8 {
+        self.cpu_bus.addr = addr;
         match addr {
             0x0000..=0x1FFF => {
                 let mirror_down_addr = addr & 0x7FF;
-                self.cpu_bus = self.vram[mirror_down_addr as usize];
-                self.cpu_bus
+                self.cpu_bus.data = self.vram[mirror_down_addr as usize];
+                self.cpu_bus.data
             }
             0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => {
-                self.cpu_bus = self.ppu_bus;
-                self.cpu_bus
+                self.cpu_bus.data = self.ppu_bus;
+                self.cpu_bus.data
             }
             0x2002 => {
                 let status = self.ppu.read_status();
                 self.ppu_bus = (status & 0xe0) | (self.ppu_bus & 0x1f);
-                self.cpu_bus = self.ppu_bus;
-                self.cpu_bus
+                self.cpu_bus.data = self.ppu_bus;
+                self.cpu_bus.data
             }
             0x2004 => {
                 self.ppu_bus = self.ppu.read_oam_data();
-                self.cpu_bus = self.ppu_bus;
-                self.cpu_bus
+                self.cpu_bus.data = self.ppu_bus;
+                self.cpu_bus.data
             }
             0x2007 => {
                 self.ppu_bus = self.ppu.read_data(&mut self.rom, self.ppu_bus);
-                self.cpu_bus = self.ppu_bus;
-                self.cpu_bus
+                self.cpu_bus.data = self.ppu_bus;
+                self.cpu_bus.data
             }
             0x2008..=0x3FFF => {
                 let mirror_down_addr = addr & 0x2007;
                 self.read_u8(mirror_down_addr)
             }
 
-            0x4000..=0x4014 => self.cpu_bus,
+            0x4000..=0x4014 => self.cpu_bus.data,
 
-            0x4015 => (self.cpu_bus & 0x20) | (self.apu.read_status() & 0xdf),
+            0x4015 => (self.cpu_bus.data & 0x20) | (self.apu.read_status() & 0xdf),
 
             0x4016 => {
-                self.cpu_bus = (self.cpu_bus & 0xe0) | (self.joypad1.read() & 0x1f);
-                self.cpu_bus
+                self.cpu_bus.data = (self.cpu_bus.data & 0xe0) | (self.joypad1.read() & 0x1f);
+                self.cpu_bus.data
             }
             0x4017 => {
-                self.cpu_bus &= 0xe0;
-                self.cpu_bus
+                self.cpu_bus.data &= 0xe0;
+                self.cpu_bus.data
             }
-            0x4018..=0x5FFF => self.cpu_bus,
+            0x4018..=0x5FFF => self.cpu_bus.data,
             0x6000..=0xFFFF => {
-                self.cpu_bus = self.rom.read_prg(addr);
-                self.cpu_bus
+                self.cpu_bus.data = self.rom.read_prg(addr);
+                self.cpu_bus.data
             }
         }
     }
 
     fn write_u8(&mut self, addr: u16, data: u8) {
-        self.cpu_bus = data;
+        self.cpu_bus.addr = addr;
+        self.cpu_bus.data = data;
         match addr {
             0x0000..=0x1FFF => {
                 let mirror_down_addr = addr & 0x7FF;
